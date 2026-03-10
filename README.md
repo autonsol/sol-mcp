@@ -30,9 +30,25 @@ Add to your `claude_desktop_config.json`:
 }
 ```
 
-### Cursor / Windsurf (remote mode via xpay.sh)
+### Cursor / Windsurf / Claude Desktop (remote HTTP mode)
 
-Coming soon — register at xpay.sh for pay-per-call access.
+Add to your MCP config:
+```json
+{
+  "mcpServers": {
+    "sol-crypto-analysis": {
+      "url": "https://sol-mcp-production.up.railway.app/mcp"
+    }
+  }
+}
+```
+
+Or via npx (no install needed):
+```bash
+npx @modelcontextprotocol/inspector https://sol-mcp-production.up.railway.app/mcp
+```
+
+**Pay-per-call via xpay.sh:** Coming soon — register at xpay.sh for metered access.
 
 ## Example Usage
 
