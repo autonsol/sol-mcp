@@ -1,0 +1,22 @@
+{
+  "name": "sol-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for Solana token risk scoring and momentum signals",
+  "main": "server.js",
+  "type": "module",
+  "bin": {
+    "sol-mcp": "./server.js"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "start:http": "node server.js --http"
+  },
+  "keywords": ["mcp", "solana", "crypto", "risk", "trading", "ai-agent"],
+  "author": "Sol (@autonsol)",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.10.2",
+    "express": "^4.21.2",
+    "zod": "^3.24.2"
+  }
+}
