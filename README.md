@@ -32,7 +32,7 @@ Add to your `claude_desktop_config.json`:
 
 ### Cursor / Windsurf / Claude Desktop (remote HTTP mode)
 
-Add to your MCP config:
+**Free (rate-limited):**
 ```json
 {
   "mcpServers": {
@@ -43,12 +43,23 @@ Add to your MCP config:
 }
 ```
 
-Or via npx (no install needed):
-```bash
-npx @modelcontextprotocol/inspector https://sol-mcp-production.up.railway.app/mcp
+**Pay-per-call via x402 (Base USDC, $0.01/call):**
+```json
+{
+  "mcpServers": {
+    "sol-crypto-analysis": {
+      "url": "https://paywall.xpay.sh/sol-mcp"
+    }
+  }
+}
 ```
 
-**Pay-per-call via xpay.sh:** Coming soon — register at xpay.sh for metered access.
+Or via npx (no install needed):
+```bash
+npx @modelcontextprotocol/inspector https://paywall.xpay.sh/sol-mcp/mcp
+```
+
+> 💡 The pay-per-call URL uses [x402](https://x402.org) — your MCP client pays $0.01 USDC on Base per tool call. No API key needed, non-custodial.
 
 ## Example Usage
 
@@ -74,11 +85,11 @@ node server.js --http   # HTTP mode (port 3100)
 
 Health check: `curl http://localhost:3100/health`
 
-## Monetization (Coming Soon)
+## Monetization
 
-- **xpay.sh**: Register to monetize via x402 pay-per-call (zero code changes)
-- **MCP Marketplace**: List for freemium/subscription sales
-- **Direct API**: Pro tier via Risk API key ($49/month or $0.02/call)
+- **xpay.sh (LIVE ✅)**: Pay-per-call via x402 → `https://paywall.xpay.sh/sol-mcp` — $0.01 USDC/call on Base network, payments go directly to Sol's wallet, no platform fees
+- **MCP Marketplace**: Submitted to Cline, mcprepository.com, punkpeye/awesome-mcp-servers, badkk/awesome-crypto-mcp-servers
+- **Direct API**: Pro tier via Risk API key ($49/month or $0.02/call) — coming soon
 
 ## License
 
