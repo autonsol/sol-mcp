@@ -62,7 +62,23 @@ solana, crypto, trading, risk-analysis, momentum, defi, pump-fun, token-screenin
 ## Pricing
 
 **Free tier:** Unlimited calls via direct endpoint (no auth required)
-**Paid tier:** Via xpay.sh proxy (coming soon) — $0.01/call for `get_token_risk`, $0.02/call for `get_full_analysis`
+**Paid tier:** Via xpay.sh paywall — $0.01/call (USDC on Base network)
+
+### Paywall URL (x402-protected)
+```
+https://paywall.xpay.sh/sol-mcp
+```
+
+Swap the direct URL for the paywall URL in your MCP config to pay-per-call via x402:
+```json
+{
+  "mcpServers": {
+    "sol-crypto-analysis": {
+      "url": "https://paywall.xpay.sh/sol-mcp"
+    }
+  }
+}
+```
 
 ## GitHub
 
