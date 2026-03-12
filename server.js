@@ -7,6 +7,8 @@
  *   - get_momentum_signal: Buy/sell momentum signal for any token
  *   - batch_token_risk: Risk scores for up to 10 tokens at once
  *   - get_full_analysis: Risk + momentum combined
+ *   - get_graduation_signals: Live BUY/SKIP decisions from Sol's graduation alert engine
+ *   - get_trading_performance: Live trading stats (win rate, PnL, recent trades)
  * 
  * Usage:
  *   node server.js           → stdio mode (Claude Desktop / Cursor)
@@ -22,6 +24,7 @@ import { randomUUID } from "crypto";
 
 const RISK_API = "https://sol-risk-production.up.railway.app";
 const MOMENTUM_API = "https://momentum-signal-production.up.railway.app";
+const GRAD_ALERT_API = "https://grad-alert-production.up.railway.app";
 
 // ─── Tool helpers ─────────────────────────────────────────────────────────────
 
@@ -42,9 +45,9 @@ async function fetchMomentum(mint) {
 function createMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis",
-    version: "1.0.0",
+    version: "1.1.0",
     description:
-      "Real-time Solana token risk scoring and momentum signals. " +
+      "Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
       "Powered by Sol's on-chain analysis engine.",
   });
 
@@ -264,6 +267,167 @@ function createMcpServer() {
     }
   );
 
+  // Tool: get_graduation_signals
+  server.tool(
+    "get_graduation_signals",
+    "Get recent token graduation signal decisions from Sol's on-chain analysis engine. " +
+      "Shows which pump.fun tokens were flagged as BUY or SKIP, with full reasoning. " +
+      "Tokens are evaluated at graduation (bonding curve completion) using risk score + momentum. " +
+      "BUY signals have risk ≤65 and strong momentum (2.0–3.0× ratio depending on risk tier). " +
+      "Use this to discover tokens Sol's AI has vetted as worth trading.",
+    {
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(50)
+        .default(10)
+        .describe("Number of recent decisions to return (1–50). Default: 10."),
+      filter: z
+        .enum(["all", "trade", "skip"])
+        .default("all")
+        .describe(
+          "Filter by decision type: 'trade' (BUY signals only), 'skip' (filtered out), or 'all'."
+        ),
+    },
+    async ({ limit, filter }) => {
+      try {
+        const url = `${GRAD_ALERT_API}/decisions?limit=${limit}`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`Grad-alert API error: ${res.status}`);
+        const data = await res.json();
+
+        const decisions = data.decisions ?? [];
+        const filtered = filter === "all"
+          ? decisions
+          : decisions.filter((d) => {
+              if (filter === "trade") return d.decision === "TRADE";
+              if (filter === "skip") return d.decision === "SKIP";
+              return true;
+            });
+
+        const s = data.summary ?? {};
+        let text =
+          `Sol Graduation Signal Decisions (${data.version ?? "v?"}, ${data.agent_id ?? "sol"})\n` +
+          `Generated: ${data.generated_at ?? "unknown"}\n` +
+          `Total: ${s.total_decisions ?? 0} decisions — ` +
+          `${s.trades ?? 0} TRADES, ${s.skips ?? 0} SKIPS\n`;
+
+        if (s.win_rate_pct != null) {
+          text += `Live Win Rate: ${s.win_rate_pct.toFixed(1)}%\n`;
+        }
+
+        const todFilter = data.timeOfDayFilter;
+        if (todFilter) {
+          const allowed = todFilter.tradingAllowed;
+          text += `Trading now: ${allowed ? "✅ YES" : "🚫 NO (blocked hour UTC ${todFilter.currentUTCHour})"}\n`;
+        }
+
+        text += `\n${"─".repeat(55)}\n`;
+
+        if (filtered.length === 0) {
+          text += `No ${filter === "all" ? "" : filter + " "}decisions found in last ${limit} records.`;
+        } else {
+          for (const d of filtered) {
+            const ts = d.timestamp
+              ? new Date(d.timestamp).toISOString().slice(0, 16).replace("T", " ")
+              : "?";
+            const icon = d.decision === "TRADE" ? "🟢" : "🔴";
+            const inp = d.inputs ?? {};
+            text += `\n${icon} ${d.decision}  ${ts} UTC\n`;
+            text += `  Token: ${inp.token ?? "?"} (${(inp.mint ?? "").slice(0, 12)}...)\n`;
+            text += `  Risk: ${inp.risk_score ?? "?"}/100`;
+            if (inp.momentum_ratio != null) text += `  Momentum: ${inp.momentum_ratio}× (buys ${inp.momentum_buys ?? "?"}/${(inp.momentum_buys ?? 0) + (inp.momentum_sells ?? 0)} total)`;
+            text += `\n`;
+            if (d.reasoning) text += `  Reason: ${d.reasoning}\n`;
+            if (d.outcome) {
+              const o = d.outcome;
+              text += `  Outcome: ${o.result ?? "?"} ${o.pnl_sol != null ? `(${o.pnl_sol > 0 ? "+" : ""}${o.pnl_sol.toFixed(4)} SOL, ${o.multiple_x != null ? o.multiple_x.toFixed(2) + "×" : ""})` : ""}\n`;
+            }
+          }
+        }
+
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `Error: ${err.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // Tool: get_trading_performance
+  server.tool(
+    "get_trading_performance",
+    "Get Sol's live trading performance stats and recent closed trades. " +
+      "Shows win rate, total PnL, ROI, and the most recent trade outcomes. " +
+      "Sol trades pump.fun graduating tokens on Solana using a risk + momentum strategy. " +
+      "Useful for evaluating signal quality before using get_graduation_signals for trade ideas.",
+    {
+      recent_count: z
+        .number()
+        .int()
+        .min(1)
+        .max(20)
+        .default(5)
+        .describe("Number of recent closed trades to show (1–20). Default: 5."),
+    },
+    async ({ recent_count }) => {
+      try {
+        const res = await fetch(`${GRAD_ALERT_API}/real-trades?limit=${recent_count}`);
+        if (!res.ok) throw new Error(`Trading API error: ${res.status}`);
+        const data = await res.json();
+
+        const st = data.stats ?? {};
+        let text =
+          `Sol Trading Performance (real capital, ${data.mode ?? "?"})\n` +
+          `${"─".repeat(50)}\n` +
+          `Total Trades: ${st.total_trades ?? 0}\n` +
+          `Win Rate: ${st.win_rate_pct != null ? st.win_rate_pct.toFixed(1) + "%" : "N/A"} ` +
+          `(${st.wins ?? 0}W / ${st.losses ?? 0}L)\n` +
+          `Total PnL: ${st.total_pnl_sol != null ? (st.total_pnl_sol > 0 ? "+" : "") + st.total_pnl_sol.toFixed(4) : "?"} SOL\n` +
+          `ROI: ${st.roi_pct != null ? (st.roi_pct > 0 ? "+" : "") + st.roi_pct.toFixed(2) + "%" : "?"}\n` +
+          `Capital Deployed: ${st.capital_deployed_sol ?? "?"} SOL\n` +
+          `Avg Hold: ${st.avg_hold_mins != null ? st.avg_hold_mins.toFixed(1) + " min" : "?"}\n` +
+          `Best Trade: ${st.best_trade_sol != null ? "+" + st.best_trade_sol.toFixed(4) + " SOL" : "?"}\n` +
+          `Worst Trade: ${st.worst_trade_sol != null ? st.worst_trade_sol.toFixed(4) + " SOL" : "?"}\n`;
+
+        const open = data.open_positions ?? [];
+        if (open.length > 0) {
+          text += `\nOpen Positions: ${open.length}\n`;
+          for (const p of open) {
+            text += `  🔵 ${(p.mint ?? "?").slice(0, 12)}... risk=${p.risk_score ?? "?"} entry=${p.entry_sol ?? "?"}SOL\n`;
+          }
+        } else {
+          text += `\nOpen Positions: None\n`;
+        }
+
+        const closed = data.recent_closed ?? [];
+        if (closed.length > 0) {
+          text += `\nRecent Closed Trades (${closed.length}):\n`;
+          for (const t of closed) {
+            const icon = t.exit_reason === "TP" ? "✅" : "❌";
+            const pnl = t.pnl_sol != null ? `${t.pnl_sol > 0 ? "+" : ""}${t.pnl_sol.toFixed(4)} SOL` : "?";
+            const mult = t.multiple_x != null ? `${t.multiple_x.toFixed(2)}×` : "?";
+            const hold = t.hold_mins != null ? `${t.hold_mins}min` : "?";
+            const ts = t.entry_time
+              ? new Date(t.entry_time).toISOString().slice(0, 16).replace("T", " ")
+              : "?";
+            text += `  ${icon} ${ts} UTC | risk=${t.risk_score ?? "?"} | ${pnl} (${mult}) | held ${hold} | exit=${t.exit_reason ?? "?"}\n`;
+          }
+        }
+
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `Error: ${err.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
   return server;
 }
 
@@ -325,8 +489,8 @@ if (isHttp) {
     res.json({
       status: "ok",
       server: "sol-crypto-analysis",
-      version: "1.0.0",
-      tools: ["get_token_risk", "get_momentum_signal", "batch_token_risk", "get_full_analysis"],
+      version: "1.1.0",
+      tools: ["get_token_risk", "get_momentum_signal", "batch_token_risk", "get_full_analysis", "get_graduation_signals", "get_trading_performance"],
       activeSessions: sessions.size,
     })
   );
