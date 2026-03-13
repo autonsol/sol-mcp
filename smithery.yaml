@@ -1,0 +1,13 @@
+# Smithery configuration file: https://smithery.ai/docs/config#smitheryyaml
+# Sol MCP Server — Solana Crypto Analysis
+# Remote deployment: https://sol-mcp-production.up.railway.app/mcp
+
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties: {}
+    description: No configuration required. All tools work out of the box.
+  commandFunction: |
+    (config) => ({ command: 'node', args: ['server.js'] })
+  exampleConfig: {}
