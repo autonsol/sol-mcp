@@ -10,6 +10,11 @@
  *   - get_graduation_signals: Live BUY/SKIP decisions from Sol's graduation alert engine
  *   - get_trading_performance: Live trading stats (win rate, PnL, recent trades)
  * 
+ * Tiers:
+ *   FREE  → /mcp/free   — 4 tools (get_token_risk, get_momentum_signal,
+ *                           get_graduation_signals, get_trading_performance)
+ *   PRO   → /mcp        — All 6 tools via xpay.sh paywall ($0.01/call)
+ * 
  * Usage:
  *   node server.js           → stdio mode (Claude Desktop / Cursor)
  *   node server.js --http    → HTTP mode (remote, for xpay.sh proxy)
@@ -45,10 +50,11 @@ async function fetchMomentum(mint) {
 function createMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis",
-    version: "1.1.0",
+    version: "1.2.0",
     description:
-      "Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
-      "Powered by Sol's on-chain analysis engine.",
+      "PRO tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
+      "All 6 tools including batch analysis. $0.01/call via xpay.sh (USDC, Base mainnet). " +
+      "FREE tier available at /mcp/free (4 tools, no cost).",
   });
 
   // Tool: get_token_risk
@@ -431,6 +437,181 @@ function createMcpServer() {
   return server;
 }
 
+// ─── Free Tier Server (4 tools, no paywall) ───────────────────────────────────
+
+function createFreeMcpServer() {
+  const server = new McpServer({
+    name: "sol-crypto-analysis-free",
+    version: "1.1.0",
+    description:
+      "FREE tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
+      "Includes 4 tools. Upgrade to PRO (via xpay.sh paywall) for batch_token_risk and get_full_analysis.",
+  });
+
+  // Register all 4 free tools by re-using the full server's tool definitions.
+  // We achieve this by creating the full server and filtering — but it's cleaner
+  // to register independently so the description accurately reflects free tier.
+
+  server.tool(
+    "get_token_risk",
+    "[FREE] Get a risk score (0–100) and risk label for a Solana token mint address. " +
+      "LOW (0-30) = safer, HIGH (56-75) = risky, EXTREME (76-100) = likely rug. " +
+      "Analyzes liquidity, whale concentration, holder count, and volume patterns.",
+    { mint: z.string().describe("Solana token mint address (base58 encoded).") },
+    async ({ mint }) => {
+      try {
+        const data = await fetchRisk(mint);
+        const score = data.risk_score ?? data.score ?? "N/A";
+        const label = data.risk_label ?? "UNKNOWN";
+        const summary = data.summary ?? "";
+        const flags = data.flags?.length ? `\nFlags: ${data.flags.join(", ")}` : "";
+        const holders = data.holder_count ? `\nHolders: ${data.holder_count}` : "";
+        const liquidity = data.liquidity_usd
+          ? `\nLiquidity: $${data.liquidity_usd.toLocaleString()}` : "";
+        const whale = data.whale_concentration_pct != null
+          ? `\nWhale concentration: ${data.whale_concentration_pct.toFixed(1)}%` : "";
+        const text =
+          `Token: ${mint}\n` +
+          `Risk Score: ${score}/100 (${label})\n` +
+          (summary ? `Summary: ${summary}` : "") +
+          holders + liquidity + whale + flags +
+          `\n\n💡 PRO: Use get_full_analysis (batch) at paywall.xpay.sh/sol-mcp — $0.01/call`;
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.tool(
+    "get_momentum_signal",
+    "[FREE] Get a buy/sell momentum signal for a Solana token based on multi-window buy/sell ratio analysis. " +
+      "Returns STRONG_BUY / BUY / NEUTRAL / SELL / STRONG_SELL with confidence level.",
+    { mint: z.string().describe("Solana token mint address (base58 encoded).") },
+    async ({ mint }) => {
+      try {
+        const data = await fetchMomentum(mint);
+        const signal = data.signal ?? "UNKNOWN";
+        const score = data.momentum_score ?? "N/A";
+        const confidence = data.confidence ?? "UNKNOWN";
+        const symbol = data.symbol ?? mint.slice(0, 8) + "...";
+        let windows = "";
+        if (data.windows) {
+          const w = data.windows;
+          windows =
+            `\nM5:  buys=${w.m5?.buys ?? "?"} sells=${w.m5?.sells ?? "?"} ratio=${w.m5?.ratio?.toFixed(2) ?? "?"}` +
+            `\nH1:  buys=${w.h1?.buys ?? "?"} sells=${w.h1?.sells ?? "?"} ratio=${w.h1?.ratio?.toFixed(2) ?? "?"}` +
+            `\nH6:  buys=${w.h6?.buys ?? "?"} sells=${w.h6?.sells ?? "?"} ratio=${w.h6?.ratio?.toFixed(2) ?? "?"}`;
+        }
+        const text =
+          `Token: ${symbol} (${mint})\n` +
+          `Signal: ${signal}\n` +
+          `Momentum Score: ${score}/100\n` +
+          `Confidence: ${confidence}` + windows +
+          `\n\n💡 PRO: Use get_full_analysis at paywall.xpay.sh/sol-mcp — $0.01/call`;
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.tool(
+    "get_graduation_signals",
+    "[FREE] Get recent token graduation signal decisions from Sol's on-chain analysis engine. " +
+      "Shows which pump.fun tokens were flagged as BUY or SKIP, with full reasoning. " +
+      "BUY signals have risk ≤65 and strong momentum (2.0–3.0× ratio depending on risk tier).",
+    {
+      limit: z.number().int().min(1).max(50).default(10)
+        .describe("Number of recent decisions to return (1–50). Default: 10."),
+      filter: z.enum(["all", "trade", "skip"]).default("all")
+        .describe("Filter: 'trade' (BUY signals only), 'skip' (filtered out), or 'all'."),
+    },
+    async ({ limit, filter }) => {
+      try {
+        const url = `${GRAD_ALERT_API}/decisions?limit=${limit}`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`Grad-alert API error: ${res.status}`);
+        const data = await res.json();
+        const decisions = data.decisions ?? [];
+        const filtered = filter === "all" ? decisions
+          : decisions.filter((d) => filter === "trade" ? d.decision === "TRADE" : d.decision === "SKIP");
+        const s = data.summary ?? {};
+        let text =
+          `Sol Graduation Signal Decisions (${data.version ?? "v?"}, ${data.agent_id ?? "sol"})\n` +
+          `Generated: ${data.generated_at ?? "unknown"}\n` +
+          `Total: ${s.total_decisions ?? 0} decisions — ${s.trades ?? 0} TRADES, ${s.skips ?? 0} SKIPS\n`;
+        if (s.win_rate_pct != null) text += `Live Win Rate: ${s.win_rate_pct.toFixed(1)}%\n`;
+        text += `\n${"─".repeat(55)}\n`;
+        if (filtered.length === 0) {
+          text += `No ${filter === "all" ? "" : filter + " "}decisions found in last ${limit} records.`;
+        } else {
+          for (const d of filtered) {
+            const ts = d.timestamp
+              ? new Date(d.timestamp).toISOString().slice(0, 16).replace("T", " ") : "?";
+            const icon = d.decision === "TRADE" ? "🟢" : "🔴";
+            const inp = d.inputs ?? {};
+            text += `\n${icon} ${d.decision}  ${ts} UTC\n`;
+            text += `  Token: ${inp.token ?? "?"} (${(inp.mint ?? "").slice(0, 12)}...)\n`;
+            text += `  Risk: ${inp.risk_score ?? "?"}/100`;
+            if (inp.momentum_ratio != null)
+              text += `  Momentum: ${inp.momentum_ratio}× (buys ${inp.momentum_buys ?? "?"}/${(inp.momentum_buys ?? 0) + (inp.momentum_sells ?? 0)} total)`;
+            text += `\n`;
+            if (d.reasoning) text += `  Reason: ${d.reasoning}\n`;
+          }
+        }
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.tool(
+    "get_trading_performance",
+    "[FREE] Get Sol's live trading performance stats and recent closed trades. " +
+      "Shows win rate, total PnL, ROI, and the most recent trade outcomes. " +
+      "Sol trades pump.fun graduating tokens on Solana using a risk + momentum strategy.",
+    {
+      recent_count: z.number().int().min(1).max(20).default(5)
+        .describe("Number of recent closed trades to show (1–20). Default: 5."),
+    },
+    async ({ recent_count }) => {
+      try {
+        const res = await fetch(`${GRAD_ALERT_API}/real-trades?limit=${recent_count}`);
+        if (!res.ok) throw new Error(`Trading API error: ${res.status}`);
+        const data = await res.json();
+        const st = data.stats ?? {};
+        let text =
+          `Sol Trading Performance (real capital, ${data.mode ?? "?"})\n` +
+          `${"─".repeat(50)}\n` +
+          `Total Trades: ${st.total_trades ?? 0}\n` +
+          `Win Rate: ${st.win_rate_pct != null ? st.win_rate_pct.toFixed(1) + "%" : "N/A"} ` +
+          `(${st.wins ?? 0}W / ${st.losses ?? 0}L)\n` +
+          `Total PnL: ${st.total_pnl_sol != null ? (st.total_pnl_sol > 0 ? "+" : "") + st.total_pnl_sol.toFixed(4) : "?"} SOL\n` +
+          `ROI: ${st.roi_pct != null ? (st.roi_pct > 0 ? "+" : "") + st.roi_pct.toFixed(2) + "%" : "?"}\n`;
+        const closed = data.recent_closed ?? [];
+        if (closed.length > 0) {
+          text += `\nRecent Closed Trades:\n`;
+          for (const t of closed) {
+            const icon = t.exit_reason === "TP" ? "✅" : "❌";
+            const pnl = t.pnl_sol != null ? `${t.pnl_sol > 0 ? "+" : ""}${t.pnl_sol.toFixed(4)} SOL` : "?";
+            const mult = t.multiple_x != null ? `${t.multiple_x.toFixed(2)}×` : "?";
+            const ts = t.entry_time
+              ? new Date(t.entry_time).toISOString().slice(0, 16).replace("T", " ") : "?";
+            text += `  ${icon} ${ts} UTC | risk=${t.risk_score ?? "?"} | ${pnl} (${mult}) | exit=${t.exit_reason ?? "?"}\n`;
+          }
+        }
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  return server;
+}
+
 // ─── Transport ────────────────────────────────────────────────────────────────
 
 const isHttp = process.argv.includes("--http");
@@ -441,7 +622,48 @@ if (isHttp) {
   app.use(express.json());
 
   const sessions = new Map(); // sessionId → { server, transport }
+  const freeSessions = new Map(); // sessionId → { server, transport } (free tier)
 
+  // ── Free tier: /mcp/free ─────────────────────────────────────────────────
+  app.post("/mcp/free", async (req, res) => {
+    const sessionId = req.headers["mcp-session-id"];
+    if (sessionId && freeSessions.has(sessionId)) {
+      const { transport } = freeSessions.get(sessionId);
+      await transport.handleRequest(req, res, req.body);
+    } else {
+      const newSessionId = sessionId || randomUUID();
+      const server = createFreeMcpServer();
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => newSessionId,
+        onsessioninitialized: (id) => {
+          freeSessions.set(id, { server, transport });
+        },
+      });
+      transport.onclose = () => { freeSessions.delete(newSessionId); };
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+    }
+  });
+
+  app.get("/mcp/free", async (req, res) => {
+    const sessionId = req.headers["mcp-session-id"];
+    if (!sessionId || !freeSessions.has(sessionId)) {
+      res.status(400).json({ error: "No active session. POST /mcp/free to initialize." });
+      return;
+    }
+    await freeSessions.get(sessionId).transport.handleRequest(req, res);
+  });
+
+  app.delete("/mcp/free", async (req, res) => {
+    const sessionId = req.headers["mcp-session-id"];
+    if (sessionId && freeSessions.has(sessionId)) {
+      await freeSessions.get(sessionId).transport.close();
+      freeSessions.delete(sessionId);
+    }
+    res.status(200).json({ ok: true });
+  });
+
+  // ── Pro tier: /mcp (all 6 tools, served behind xpay.sh paywall) ─────────
   app.post("/mcp", async (req, res) => {
     const sessionId = req.headers["mcp-session-id"];
 
@@ -489,9 +711,21 @@ if (isHttp) {
     res.json({
       status: "ok",
       server: "sol-crypto-analysis",
-      version: "1.1.0",
-      tools: ["get_token_risk", "get_momentum_signal", "batch_token_risk", "get_full_analysis", "get_graduation_signals", "get_trading_performance"],
+      version: "1.2.0",
+      tiers: {
+        free: {
+          endpoint: "/mcp/free",
+          tools: ["get_token_risk", "get_momentum_signal", "get_graduation_signals", "get_trading_performance"],
+          price: "FREE",
+        },
+        pro: {
+          endpoint: "/mcp (via paywall.xpay.sh/sol-mcp)",
+          tools: ["get_token_risk", "get_momentum_signal", "batch_token_risk", "get_full_analysis", "get_graduation_signals", "get_trading_performance"],
+          price: "$0.01/call (USDC, Base mainnet)",
+        },
+      },
       activeSessions: sessions.size,
+      activeFreeSessions: freeSessions.size,
     })
   );
 

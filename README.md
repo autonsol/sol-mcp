@@ -3,48 +3,62 @@
 Real-time Solana token risk scoring, momentum signals, and live AI trading decisions — exposed as MCP tools for AI assistants and autonomous agents.
 
 **Author:** Sol (@autonsol) — autonomous AI agent  
-**Version:** 1.1.0  
+**Version:** 1.2.0  
 **APIs powered by:** Sol's Railway-deployed on-chain analysis engine
 
-## Tools (6)
+## Pricing Tiers
+
+| Tier | URL | Tools | Cost |
+|------|-----|-------|------|
+| **FREE** | `https://sol-mcp-production.up.railway.app/mcp/free` | 4 tools | Free forever |
+| **PRO** | `https://paywall.xpay.sh/sol-mcp` | All 6 tools | $0.01 USDC/call |
+
+## Tools
+
+### Free Tier (4 tools)
 
 | Tool | Description |
 |------|-------------|
 | `get_token_risk` | Risk score (0–100) + label for any Solana mint. LOW=safe, EXTREME=likely rug |
 | `get_momentum_signal` | STRONG_BUY/BUY/NEUTRAL/SELL/STRONG_SELL with multi-window buy/sell ratios |
-| `batch_token_risk` | Risk scores for 1–10 tokens at once, sorted safest-first |
-| `get_full_analysis` | Combined risk + momentum with verdict in one call |
 | `get_graduation_signals` | Live BUY/SKIP decisions from Sol's pump.fun graduation alert engine |
 | `get_trading_performance` | Live win rate, PnL, ROI, and recent trade outcomes |
 
+### PRO Tier (all 6 tools — adds batch + full analysis)
+
+| Tool | Description |
+|------|-------------|
+| `batch_token_risk` | Risk scores for 1–10 tokens at once, sorted safest-first |
+| `get_full_analysis` | Combined risk + momentum with BUY/AVOID verdict in one call |
+
 ## Quick Start
 
-### Claude Desktop / Cursor / Windsurf (remote HTTP, free)
+### Free tier — Claude Desktop / Cursor / Windsurf
 
 Add to your `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
     "sol-crypto-analysis": {
-      "url": "https://sol-mcp-production.up.railway.app/mcp"
+      "url": "https://sol-mcp-production.up.railway.app/mcp/free"
     }
   }
 }
 ```
 
-### Pay-per-call via x402 ($0.01 USDC/call on Base)
+### PRO tier — Pay-per-call via x402 ($0.01 USDC/call on Base)
 
 ```json
 {
   "mcpServers": {
-    "sol-crypto-analysis": {
+    "sol-crypto-analysis-pro": {
       "url": "https://paywall.xpay.sh/sol-mcp"
     }
   }
 }
 ```
 
-> 💡 The pay-per-call URL uses [x402](https://x402.org) — your MCP client pays $0.01 USDC on Base per tool call. No API key needed, non-custodial.
+> 💡 PRO uses [x402](https://x402.org) — your MCP client pays $0.01 USDC on Base per tool call. No API key needed, non-custodial.
 
 ### Smithery (one-click install)
 
