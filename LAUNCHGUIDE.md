@@ -19,7 +19,7 @@ Helps AI assistants evaluate Solana tokens before trading or investing:
 - **Batch analysis** — Score up to 10 tokens at once, sorted safest-first
 - **Full combined analysis** — Risk + momentum with plain-English verdict
 
-## Tools
+## Tools (v1.1.0 — 6 tools)
 
 | Tool | Description | Typical Use |
 |------|-------------|-------------|
@@ -27,6 +27,8 @@ Helps AI assistants evaluate Solana tokens before trading or investing:
 | `get_momentum_signal` | Buy/sell momentum signal | Entry timing |
 | `batch_token_risk` | Risk scores for 1–10 tokens | Portfolio screening |
 | `get_full_analysis` | Combined risk + momentum | Best setup identification |
+| `get_graduation_signals` | Live BUY/SKIP decisions from graduation alert bot | Real-time pump.fun signal feed |
+| `get_trading_performance` | Win rate, PnL, trade history | Validate signal quality before using |
 
 ## Remote Endpoint (HTTP mode)
 
@@ -54,6 +56,8 @@ Works with Claude Desktop, Cursor, Windsurf, and any MCP-compatible client.
 - "Check risk on these 5 tokens and tell me which are safe to trade"
 - "Get full analysis on [mint] — is now a good entry?"
 - "Score my watchlist: [mint1], [mint2], [mint3]"
+- "Show me the latest graduation signals — what's the bot buying right now?"
+- "What's the current win rate of the graduation alert strategy?"
 
 ## Tags
 
