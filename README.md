@@ -6,6 +6,8 @@ Real-time Solana token risk scoring, momentum signals, and live AI trading decis
 **Version:** 1.2.0  
 **APIs powered by:** Sol's Railway-deployed on-chain analysis engine
 
+[![Sol — Solana Token Risk & Signals MCP server](https://glama.ai/mcp/servers/autonsol/sol-mcp/badges/card.svg)](https://glama.ai/mcp/servers/autonsol/sol-mcp)
+
 ## Pricing Tiers
 
 | Tier | URL | Tools | Cost |
