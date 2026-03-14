@@ -50,7 +50,7 @@ async function fetchMomentum(mint) {
 function createMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis",
-    version: "1.2.0",
+    version: "1.3.0",
     description:
       "PRO tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
       "All 6 tools including batch analysis. $0.01/call via xpay.sh (USDC, Base mainnet). " +
@@ -68,6 +68,7 @@ function createMcpServer() {
         .string()
         .describe("Solana token mint address (base58 encoded)."),
     },
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     async ({ mint }) => {
       try {
         const data = await fetchRisk(mint);
@@ -111,6 +112,7 @@ function createMcpServer() {
     {
       mint: z.string().describe("Solana token mint address (base58 encoded)."),
     },
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     async ({ mint }) => {
       try {
         const data = await fetchMomentum(mint);
@@ -157,6 +159,7 @@ function createMcpServer() {
         .max(10)
         .describe("Array of Solana token mint addresses, 1–10 items."),
     },
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     async ({ mints }) => {
       try {
         const results = await Promise.allSettled(mints.map(fetchRisk));
@@ -206,6 +209,7 @@ function createMcpServer() {
     {
       mint: z.string().describe("Solana token mint address (base58 encoded)."),
     },
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     async ({ mint }) => {
       try {
         const [riskResult, momentumResult] = await Promise.allSettled([
@@ -296,6 +300,7 @@ function createMcpServer() {
           "Filter by decision type: 'trade' (BUY signals only), 'skip' (filtered out), or 'all'."
         ),
     },
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     async ({ limit, filter }) => {
       try {
         const url = `${GRAD_ALERT_API}/decisions?limit=${limit}`;
@@ -379,6 +384,7 @@ function createMcpServer() {
         .default(5)
         .describe("Number of recent closed trades to show (1–20). Default: 5."),
     },
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     async ({ recent_count }) => {
       try {
         const res = await fetch(`${GRAD_ALERT_API}/real-trades?limit=${recent_count}`);
@@ -442,7 +448,7 @@ function createMcpServer() {
 function createFreeMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis-free",
-    version: "1.1.0",
+    version: "1.2.0",
     description:
       "FREE tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
       "Includes 4 tools. Upgrade to PRO (via xpay.sh paywall) for batch_token_risk and get_full_analysis.",
@@ -458,6 +464,7 @@ function createFreeMcpServer() {
       "LOW (0-30) = safer, HIGH (56-75) = risky, EXTREME (76-100) = likely rug. " +
       "Analyzes liquidity, whale concentration, holder count, and volume patterns.",
     { mint: z.string().describe("Solana token mint address (base58 encoded).") },
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     async ({ mint }) => {
       try {
         const data = await fetchRisk(mint);
@@ -488,6 +495,7 @@ function createFreeMcpServer() {
     "[FREE] Get a buy/sell momentum signal for a Solana token based on multi-window buy/sell ratio analysis. " +
       "Returns STRONG_BUY / BUY / NEUTRAL / SELL / STRONG_SELL with confidence level.",
     { mint: z.string().describe("Solana token mint address (base58 encoded).") },
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     async ({ mint }) => {
       try {
         const data = await fetchMomentum(mint);
@@ -527,6 +535,7 @@ function createFreeMcpServer() {
       filter: z.enum(["all", "trade", "skip"]).default("all")
         .describe("Filter: 'trade' (BUY signals only), 'skip' (filtered out), or 'all'."),
     },
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     async ({ limit, filter }) => {
       try {
         const url = `${GRAD_ALERT_API}/decisions?limit=${limit}`;
@@ -576,6 +585,7 @@ function createFreeMcpServer() {
       recent_count: z.number().int().min(1).max(20).default(5)
         .describe("Number of recent closed trades to show (1–20). Default: 5."),
     },
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     async ({ recent_count }) => {
       try {
         const res = await fetch(`${GRAD_ALERT_API}/real-trades?limit=${recent_count}`);
@@ -707,11 +717,125 @@ if (isHttp) {
     res.status(200).json({ ok: true });
   });
 
+  // ── Agent Card — ERC-8004 / A2A standard ─────────────────────────────────
+  // Required for ERC-8004 registration and agent-to-agent discovery.
+  // Spec: https://eips.ethereum.org/EIPS/eip-8004
+  app.get("/.well-known/agent-card.json", (_, res) => {
+    res.json({
+      schemaVersion: "1.0",
+      name: "Sol",
+      description:
+        "Autonomous AI trading agent specialized in Solana DeFi — token risk scoring, " +
+        "momentum signals, and pump.fun graduation trading with verifiable on-chain track record. " +
+        "Every trade is logged and publicly auditable. Cross-chain: Solana execution + EVM trust layer (ERC-8004).",
+      url: "https://sol-mcp-production.up.railway.app",
+      version: "1.3.0",
+      capabilities: {
+        streaming: false,
+        pushNotifications: false,
+        stateTransitionHistory: false,
+        x402Payments: true,
+      },
+      defaultInputModes: ["text/plain", "application/json"],
+      defaultOutputModes: ["text/plain"],
+      skills: [
+        {
+          id: "token_risk_scoring",
+          name: "Token Risk Scoring",
+          description:
+            "On-chain risk analysis for Solana tokens: liquidity, whale concentration, " +
+            "holder count, contract flags. Returns 0-100 score with risk label (LOW/MEDIUM/HIGH/EXTREME).",
+          tags: ["solana", "defi", "risk", "meme-coins", "pump.fun"],
+          examples: [
+            "What is the risk score for this Solana token?",
+            "Is this pump.fun token safe to trade?",
+            "Analyze token risk for mint address XYZ",
+          ],
+        },
+        {
+          id: "momentum_signals",
+          name: "Momentum Signal Detection",
+          description:
+            "Multi-window buy/sell momentum signals for Solana tokens (M5/H1/H6). " +
+            "Returns STRONG_BUY / BUY / NEUTRAL / SELL / STRONG_SELL with confidence.",
+          tags: ["solana", "trading", "signals", "momentum", "defi"],
+          examples: [
+            "What is the momentum signal for this token?",
+            "Is there buy pressure on this Solana token?",
+          ],
+        },
+        {
+          id: "graduation_trading",
+          name: "pump.fun Graduation Alert & Trading",
+          description:
+            "Autonomous trading agent monitoring pump.fun graduation events 24/7. " +
+            "Evaluates tokens using risk+momentum composite and executes trades. " +
+            "Real capital, verifiable PnL. 7 closed trades: 2 TP / 5 SL.",
+          tags: ["solana", "pump.fun", "trading", "autonomous", "graduation"],
+          examples: [
+            "What are Sol's recent graduation trading signals?",
+            "Show me Sol's live trading performance",
+          ],
+        },
+        {
+          id: "batch_risk_analysis",
+          name: "Batch Token Risk Analysis",
+          description:
+            "Risk scores for up to 10 Solana tokens in one API call. " +
+            "PRO tier only (requires x402 payment).",
+          tags: ["solana", "risk", "batch", "portfolio"],
+        },
+      ],
+      provider: {
+        organization: "autonsol",
+        url: "https://github.com/autonsol",
+        contact: "https://t.me/autonsol",
+      },
+      authentication: {
+        schemes: ["none", "x402"],
+        freeTier: {
+          endpoint: "https://sol-mcp-production.up.railway.app/mcp/free",
+          tools: ["get_token_risk", "get_momentum_signal", "get_graduation_signals", "get_trading_performance"],
+          price: "FREE — no auth required",
+        },
+        x402: {
+          endpoint: "https://paywall.xpay.sh/sol-mcp",
+          pricePerCall: "0.01",
+          currency: "USDC",
+          network: "base-mainnet",
+          paymentAddress: "0xa18853fbaf559e73307458c2488a2cf214d0ca7c",
+        },
+      },
+      serviceEndpoints: {
+        mcp_free: "https://sol-mcp-production.up.railway.app/mcp/free",
+        mcp_pro_paywall: "https://paywall.xpay.sh/sol-mcp",
+        agent_card: "https://sol-mcp-production.up.railway.app/.well-known/agent-card.json",
+        trading_decisions: "https://grad-alert-production.up.railway.app/decisions",
+        trading_performance: "https://grad-alert-production.up.railway.app/real-trades",
+        token_risk: "https://sol-risk-production.up.railway.app/risk/{mint}",
+        momentum: "https://momentum-signal-production.up.railway.app/analyze/{mint}",
+      },
+      erc8004: {
+        network: "base-mainnet",
+        identity: "pending_registration",
+        tags: ["tradingYield", "solana", "graduation-trading", "risk-scoring"],
+        reputationReporter: true,
+        tradingYield: true,
+      },
+      safetyRating: {
+        autonomous: true,
+        realCapitalTrading: true,
+        maxPositionSol: 0.02,
+        riskThreshold: 65,
+      },
+    });
+  });
+
   app.get("/health", (_, res) =>
     res.json({
       status: "ok",
       server: "sol-crypto-analysis",
-      version: "1.2.0",
+      version: "1.3.0",
       tiers: {
         free: {
           endpoint: "/mcp/free",
@@ -724,6 +848,7 @@ if (isHttp) {
           price: "$0.01/call (USDC, Base mainnet)",
         },
       },
+      agentCard: "/.well-known/agent-card.json",
       activeSessions: sessions.size,
       activeFreeSessions: freeSessions.size,
     })
