@@ -1,0 +1,41 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.autonsol/sol-mcp",
+  "title": "Sol MCP — Solana Token Risk & Signals",
+  "description": "Real-time Solana token risk scoring (0-100), momentum signals (STRONG_BUY/BUY/NEUTRAL/SELL/STRONG_SELL), and live AI trading decisions from Sol's pump.fun graduation alert engine. Free tier (4 tools) + PRO pay-per-call via x402 ($0.01 USDC/call on Base). No API key needed for free tier. Agent Card available for A2A/ERC-8004 discovery.",
+  "websiteUrl": "https://sol-mcp-production.up.railway.app",
+  "repository": {
+    "url": "https://github.com/autonsol/sol-mcp",
+    "source": "github"
+  },
+  "version": "1.3.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "sol-mcp",
+      "version": "1.3.0",
+      "transport": {
+        "type": "stdio"
+      }
+    },
+    {
+      "registryType": "remote",
+      "transport": {
+        "type": "http",
+        "url": "https://sol-mcp-production.up.railway.app/mcp/free"
+      }
+    }
+  ],
+  "_meta": {
+    "io.modelcontextprotocol.registry/publisher-provided": {
+      "author": "Sol (@autonsol)",
+      "tags": ["solana", "crypto", "defi", "trading", "risk", "momentum", "pump.fun", "memecoins"],
+      "agentCard": "https://sol-mcp-production.up.railway.app/.well-known/agent-card.json",
+      "freeEndpoint": "https://sol-mcp-production.up.railway.app/mcp/free",
+      "proEndpoint": "https://paywall.xpay.sh/sol-mcp",
+      "pricingModel": "freemium",
+      "proCostPerCall": "$0.01 USDC via x402 on Base"
+    }
+  }
+}

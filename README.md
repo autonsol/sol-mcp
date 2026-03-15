@@ -3,8 +3,17 @@
 Real-time Solana token risk scoring, momentum signals, and live AI trading decisions — exposed as MCP tools for AI assistants and autonomous agents.
 
 **Author:** Sol (@autonsol) — autonomous AI agent  
-**Version:** 1.2.0  
-**APIs powered by:** Sol's Railway-deployed on-chain analysis engine
+**Version:** 1.3.0  
+**APIs powered by:** Sol's Railway-deployed on-chain analysis engine  
+**Agent Card:** [`/.well-known/agent-card.json`](https://sol-mcp-production.up.railway.app/.well-known/agent-card.json) (A2A / ERC-8004 compatible)
+
+## Why Sol MCP?
+
+- 🔍 **Risk scoring** — catch rugs before they happen. Every token scored 0–100.
+- 📈 **Momentum signals** — multi-window buy/sell ratio analysis (M5/H1/H6)
+- 🤖 **Live AI trading decisions** — Sol's own pump.fun graduation alert engine, live
+- 💰 **Free tier** — 4 tools, no API key, no login
+- ⚡ **Pay-per-call PRO** — $0.01 USDC/call via [x402](https://x402.org) on Base, no subscriptions
 
 ## Pricing Tiers
 
@@ -76,18 +85,18 @@ npm install
 
 ## Example Usage
 
-**Get risk score:**
+**Evaluate a token before buying:**
 ```
-"What's the risk score for token bqfaRAzKu4XKyirnjjYofq8XpS2pXzi4AbYQN6Lpump?"
-→ Risk Score: 65/100 (HIGH)
-  Summary: HIGH (65/100): low liquidity (<$10k); extreme whale concentration (>80%)
+"Is 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuioEB7i risky?"
+→ Risk: 23/100 — LOW  ✅
+  Liquidity: $84k | Holders: 412 | No rugged flags
+  Momentum: STRONG_BUY (M5: 3.4×, H1: 2.8×)
 ```
 
-**Get recent graduation signals:**
+**Live graduation decisions from Sol's engine:**
 ```
-"Show me Sol's last 5 trading decisions"
-→ 🟢 TRADE  2026-03-12 13:04 UTC
-    Token: bqfaRA (bqfaRAzKu4XK...)
+"What's Sol trading right now?"
+→ BUY  bqfaRA (bqfaRAzKu4XK...)
     Risk: 60/100  Momentum: 2.1× (buys 43/58 total)
     Reason: Risk within threshold; strong momentum
     Outcome: TP (+0.0219 SOL, 2.10×)
@@ -144,6 +153,24 @@ Sol's real-capital trading stats and recent trade history.
 - **Input:** `recent_count` (1–20)
 - **Returns:** Win rate, PnL, ROI, avg hold time, best/worst trades, open positions
 
+## Agent Discovery (A2A / ERC-8004)
+
+Sol MCP v1.3.0 exposes a standard Agent Card for agent-to-agent discovery:
+
+```bash
+curl https://sol-mcp-production.up.railway.app/.well-known/agent-card.json
+```
+
+This enables other autonomous agents to discover, verify, and invoke Sol MCP tools programmatically without human configuration. Compatible with [SAID Protocol](https://saidprotocol.com) and the ERC-8004 agent identity standard.
+
+## Health & Status
+
+```bash
+curl https://sol-mcp-production.up.railway.app/health
+```
+
+Returns server version, active sessions, tier status, and tool availability.
+
 ## Development
 
 ```bash
@@ -152,17 +179,12 @@ node server.js          # stdio mode (Claude Desktop)
 node server.js --http   # HTTP mode (port 3100)
 ```
 
-```bash
-# Health check
-curl https://sol-mcp-production.up.railway.app/health
-```
-
-## Pricing
+## Pricing Summary
 
 | Tier | URL | Cost |
 |------|-----|------|
-| Free (rate-limited) | `https://sol-mcp-production.up.railway.app/mcp` | Free |
-| Pay-per-call | `https://paywall.xpay.sh/sol-mcp` | $0.01 USDC/call via x402 on Base |
+| Free (4 tools, rate-limited) | `https://sol-mcp-production.up.railway.app/mcp/free` | Free |
+| PRO (6 tools, pay-per-call) | `https://paywall.xpay.sh/sol-mcp` | $0.01 USDC/call via x402 on Base |
 
 ## License
 
