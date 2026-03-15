@@ -50,11 +50,11 @@ async function fetchMomentum(mint) {
 function createMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis",
-    version: "1.3.0",
+    version: "1.4.0",
     description:
       "PRO tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
       "All 6 tools including batch analysis. $0.01/call via xpay.sh (USDC, Base mainnet). " +
-      "FREE tier available at /mcp/free (4 tools, no cost).",
+      "FREE tier available at /mcp/free (5 tools including get_pro_features, no cost).",
   });
 
   // Tool: get_token_risk
@@ -448,10 +448,10 @@ function createMcpServer() {
 function createFreeMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis-free",
-    version: "1.2.0",
+    version: "1.4.0",
     description:
       "FREE tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
-      "Includes 4 tools. Upgrade to PRO (via xpay.sh paywall) for batch_token_risk and get_full_analysis.",
+      "Includes 4 tools. Upgrade to PRO (via paywall.xpay.sh/sol-mcp) for batch_token_risk and get_full_analysis ($0.01/call USDC).",
   });
 
   // Register all 4 free tools by re-using the full server's tool definitions.
@@ -482,7 +482,11 @@ function createFreeMcpServer() {
           `Risk Score: ${score}/100 (${label})\n` +
           (summary ? `Summary: ${summary}` : "") +
           holders + liquidity + whale + flags +
-          `\n\n💡 PRO: Use get_full_analysis (batch) at paywall.xpay.sh/sol-mcp — $0.01/call`;
+          `\n\n─────────────────────────────────────\n` +
+          `⚡ UPGRADE TO PRO — $0.01/call (USDC)\n` +
+          `  get_full_analysis: risk + momentum in ONE call (vs 2 free calls)\n` +
+          `  batch_token_risk: score 10 tokens at once\n` +
+          `  → paywall.xpay.sh/sol-mcp`;
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
@@ -511,12 +515,18 @@ function createFreeMcpServer() {
             `\nH1:  buys=${w.h1?.buys ?? "?"} sells=${w.h1?.sells ?? "?"} ratio=${w.h1?.ratio?.toFixed(2) ?? "?"}` +
             `\nH6:  buys=${w.h6?.buys ?? "?"} sells=${w.h6?.sells ?? "?"} ratio=${w.h6?.ratio?.toFixed(2) ?? "?"}`;
         }
+        const actionLine = signal.includes("BUY")
+          ? `\n💡 Signal looks bullish? get_full_analysis (PRO) gives you risk + momentum in 1 call.`
+          : signal.includes("SELL")
+          ? `\n💡 Bearish signal? Combine with get_token_risk (free) or get_full_analysis (PRO, 1 call).`
+          : `\n💡 PRO: get_full_analysis combines risk + momentum in 1 call vs 2 free calls.`;
         const text =
           `Token: ${symbol} (${mint})\n` +
           `Signal: ${signal}\n` +
           `Momentum Score: ${score}/100\n` +
           `Confidence: ${confidence}` + windows +
-          `\n\n💡 PRO: Use get_full_analysis at paywall.xpay.sh/sol-mcp — $0.01/call`;
+          actionLine +
+          `\n→ paywall.xpay.sh/sol-mcp ($0.01/call USDC)`;
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
@@ -552,6 +562,7 @@ function createFreeMcpServer() {
           `Total: ${s.total_decisions ?? 0} decisions — ${s.trades ?? 0} TRADES, ${s.skips ?? 0} SKIPS\n`;
         if (s.win_rate_pct != null) text += `Live Win Rate: ${s.win_rate_pct.toFixed(1)}%\n`;
         text += `\n${"─".repeat(55)}\n`;
+        const tradeCount = filtered.filter(d => d.decision === "TRADE").length;
         if (filtered.length === 0) {
           text += `No ${filter === "all" ? "" : filter + " "}decisions found in last ${limit} records.`;
         } else {
@@ -568,6 +579,14 @@ function createFreeMcpServer() {
             text += `\n`;
             if (d.reasoning) text += `  Reason: ${d.reasoning}\n`;
           }
+        }
+        if (tradeCount > 0) {
+          text +=
+            `\n─────────────────────────────────────\n` +
+            `⚡ ${tradeCount} BUY signal${tradeCount > 1 ? "s" : ""} above — screen the mints faster with PRO:\n` +
+            `  batch_token_risk: risk scores for 10 tokens in 1 call\n` +
+            `  get_full_analysis: risk + momentum for any token in 1 call\n` +
+            `  → paywall.xpay.sh/sol-mcp ($0.01/call USDC, Base mainnet)`;
         }
         return { content: [{ type: "text", text }] };
       } catch (err) {
@@ -612,10 +631,51 @@ function createFreeMcpServer() {
             text += `  ${icon} ${ts} UTC | risk=${t.risk_score ?? "?"} | ${pnl} (${mult}) | exit=${t.exit_reason ?? "?"}\n`;
           }
         }
+        text +=
+          `\n─────────────────────────────────────\n` +
+          `⚡ Want to follow these signals yourself? PRO tools:\n` +
+          `  get_full_analysis: risk + momentum for any token in 1 call\n` +
+          `  batch_token_risk: screen 10 tokens at once\n` +
+          `  → paywall.xpay.sh/sol-mcp ($0.01/call USDC)`;
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
       }
+    }
+  );
+
+  // Tool: get_pro_features (free tier conversion hook)
+  server.tool(
+    "get_pro_features",
+    "List all PRO tier tools and how to upgrade. " +
+      "PRO adds batch_token_risk (10 tokens in 1 call) and get_full_analysis (risk + momentum combined). " +
+      "$0.01/call USDC via xpay.sh — no subscription, pay only when you use it.",
+    {},
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async () => {
+      const text =
+        `Sol MCP — PRO Tier Features\n` +
+        `${"═".repeat(45)}\n\n` +
+        `Current tier: FREE (4 tools, no limit)\n` +
+        `PRO tier: $0.01/call USDC — pay per use, no subscription\n` +
+        `Payment: Base mainnet USDC via xpay.sh (EVM wallet needed)\n\n` +
+        `FREE tools (available now):\n` +
+        `  ✅ get_token_risk         — risk score for 1 token\n` +
+        `  ✅ get_momentum_signal    — buy/sell momentum for 1 token\n` +
+        `  ✅ get_graduation_signals — Sol's live BUY/SKIP decisions\n` +
+        `  ✅ get_trading_performance — win rate, PnL, recent trades\n\n` +
+        `PRO-only tools (unlock at paywall.xpay.sh/sol-mcp):\n` +
+        `  🔒 batch_token_risk      — risk scores for 10 tokens in 1 call\n` +
+        `     → saves 9 API calls when screening a watchlist\n` +
+        `  🔒 get_full_analysis     — risk + momentum combined in 1 call\n` +
+        `     → saves 1 call per token vs using 2 free tools separately\n\n` +
+        `How to upgrade:\n` +
+        `  1. Go to: https://paywall.xpay.sh/sol-mcp\n` +
+        `  2. Connect an EVM wallet (MetaMask, Coinbase, etc.)\n` +
+        `  3. Fund with USDC on Base mainnet (any amount)\n` +
+        `  4. Use the PRO endpoint: https://sol-mcp-production.up.railway.app/mcp\n\n` +
+        `Questions? Sol is on Telegram: @autonsol`;
+      return { content: [{ type: "text", text }] };
     }
   );
 
@@ -729,7 +789,7 @@ if (isHttp) {
         "momentum signals, and pump.fun graduation trading with verifiable on-chain track record. " +
         "Every trade is logged and publicly auditable. Cross-chain: Solana execution + EVM trust layer (ERC-8004).",
       url: "https://sol-mcp-production.up.railway.app",
-      version: "1.3.0",
+      version: "1.4.0",
       capabilities: {
         streaming: false,
         pushNotifications: false,
@@ -795,7 +855,7 @@ if (isHttp) {
         schemes: ["none", "x402"],
         freeTier: {
           endpoint: "https://sol-mcp-production.up.railway.app/mcp/free",
-          tools: ["get_token_risk", "get_momentum_signal", "get_graduation_signals", "get_trading_performance"],
+          tools: ["get_token_risk", "get_momentum_signal", "get_graduation_signals", "get_trading_performance", "get_pro_features"],
           price: "FREE — no auth required",
         },
         x402: {
@@ -835,11 +895,11 @@ if (isHttp) {
     res.json({
       status: "ok",
       server: "sol-crypto-analysis",
-      version: "1.3.0",
+      version: "1.4.0",
       tiers: {
         free: {
           endpoint: "/mcp/free",
-          tools: ["get_token_risk", "get_momentum_signal", "get_graduation_signals", "get_trading_performance"],
+          tools: ["get_token_risk", "get_momentum_signal", "get_graduation_signals", "get_trading_performance", "get_pro_features"],
           price: "FREE",
         },
         pro: {
