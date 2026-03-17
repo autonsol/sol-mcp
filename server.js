@@ -50,7 +50,7 @@ async function fetchMomentum(mint) {
 function createMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis",
-    version: "1.4.0",
+    version: "1.5.0",
     description:
       "PRO tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
       "All 6 tools including batch analysis. $0.01/call via xpay.sh (USDC, Base mainnet). " +
@@ -448,7 +448,7 @@ function createMcpServer() {
 function createFreeMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis-free",
-    version: "1.4.0",
+    version: "1.5.0",
     description:
       "FREE tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
       "Includes 4 tools. Upgrade to PRO (via paywall.xpay.sh/sol-mcp) for batch_token_risk and get_full_analysis ($0.01/call USDC).",
@@ -789,7 +789,7 @@ if (isHttp) {
         "momentum signals, and pump.fun graduation trading with verifiable on-chain track record. " +
         "Every trade is logged and publicly auditable. Cross-chain: Solana execution + EVM trust layer (ERC-8004).",
       url: "https://sol-mcp-production.up.railway.app",
-      version: "1.4.0",
+      version: "1.5.0",
       capabilities: {
         streaming: false,
         pushNotifications: false,
@@ -891,11 +891,175 @@ if (isHttp) {
     });
   });
 
+  // ── Landing page ────────────────────────────────────────────────────────
+  app.get("/", async (_, res) => {
+    // Fetch live stats for display
+    let gradStats = { win_rate_pct: null, total_trades: null, avg_pnl_pct: null };
+    let decisions = { total_decisions: null, tradeable_pct: null };
+    try {
+      const [ptRes, decRes] = await Promise.allSettled([
+        fetch(`${GRAD_ALERT_API}/paper-trades?limit=1`),
+        fetch(`${GRAD_ALERT_API}/decisions?limit=1`),
+      ]);
+      if (ptRes.status === 'fulfilled' && ptRes.value.ok) {
+        const d = await ptRes.value.json();
+        gradStats = d.stats ?? gradStats;
+      }
+      if (decRes.status === 'fulfilled' && decRes.value.ok) {
+        const d = await decRes.value.json();
+        decisions = d.summary ?? decisions;
+      }
+    } catch {}
+
+    const wrLabel = gradStats.win_rate_pct != null ? `${gradStats.win_rate_pct.toFixed(1)}%` : '—';
+    const tradeLabel = gradStats.total_trades != null ? `${gradStats.total_trades}+` : '—';
+    const pnlLabel = gradStats.avg_pnl_pct != null ? `${gradStats.avg_pnl_pct > 0 ? '+' : ''}${gradStats.avg_pnl_pct.toFixed(1)}%` : '—';
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sol MCP — Solana Token Risk & Signals</title>
+  <style>
+    :root { --bg:#0a0a0f; --surface:#12121a; --surface2:#1a1a26; --accent:#9945ff; --accent2:#14f195; --text:#e8e8f0; --muted:#6e6e8a; --border:#2a2a3e; }
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; line-height:1.6; }
+    a { color:var(--accent2); text-decoration:none; }
+    a:hover { text-decoration:underline; }
+    .container { max-width:860px; margin:0 auto; padding:40px 24px; }
+    .hero { text-align:center; padding:60px 0 40px; }
+    .hero h1 { font-size:2.4rem; font-weight:700; background:linear-gradient(135deg,#9945ff,#14f195); -webkit-background-clip:text; -webkit-text-fill-color:transparent; margin-bottom:12px; }
+    .hero p { font-size:1.1rem; color:var(--muted); max-width:560px; margin:0 auto 28px; }
+    .badge { display:inline-block; background:var(--surface2); border:1px solid var(--border); border-radius:20px; padding:6px 14px; font-size:0.78rem; color:var(--muted); margin:4px; }
+    .badge.green { border-color:#14f19544; color:#14f195; }
+    .badge.purple { border-color:#9945ff44; color:#b07aff; }
+    .stats { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:40px 0; }
+    .stat { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:20px; text-align:center; }
+    .stat .num { font-size:2rem; font-weight:700; color:var(--accent2); }
+    .stat .label { font-size:0.82rem; color:var(--muted); margin-top:4px; }
+    .tiers { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin:40px 0; }
+    .tier { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:28px; }
+    .tier.pro { border-color:#9945ff66; background:linear-gradient(160deg,#12121a,#1a0f2e); }
+    .tier h3 { font-size:1.1rem; font-weight:700; margin-bottom:6px; }
+    .tier .price { font-size:1.6rem; font-weight:800; color:var(--accent2); margin:8px 0 14px; }
+    .tier.pro .price { color:#b07aff; }
+    .tier ul { list-style:none; }
+    .tier ul li { padding:4px 0; font-size:0.9rem; color:var(--muted); }
+    .tier ul li::before { content:"✓ "; color:var(--accent2); }
+    .tier.pro ul li::before { color:#9945ff; }
+    .cta { display:inline-block; margin-top:18px; padding:10px 22px; border-radius:8px; font-size:0.9rem; font-weight:600; }
+    .cta.free { background:var(--surface2); border:1px solid var(--border); color:var(--text); }
+    .cta.pro { background:linear-gradient(135deg,#9945ff,#6e2db3); color:white; }
+    .cta:hover { opacity:0.9; text-decoration:none; }
+    .tools { margin:40px 0; }
+    .tools h2 { font-size:1.3rem; font-weight:700; margin-bottom:18px; color:var(--text); }
+    .tool { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:16px 20px; margin-bottom:10px; display:flex; align-items:flex-start; gap:14px; }
+    .tool-icon { font-size:1.4rem; margin-top:2px; }
+    .tool-name { font-weight:600; font-size:0.95rem; }
+    .tool-desc { font-size:0.85rem; color:var(--muted); margin-top:3px; }
+    .pro-tag { background:#9945ff22; border:1px solid #9945ff44; color:#b07aff; font-size:0.7rem; padding:2px 8px; border-radius:10px; margin-left:8px; vertical-align:middle; }
+    .install { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:28px; margin:40px 0; }
+    .install h2 { font-size:1.2rem; font-weight:700; margin-bottom:16px; }
+    .install pre { background:var(--surface2); border:1px solid var(--border); border-radius:8px; padding:14px 18px; font-size:0.88rem; overflow-x:auto; color:#a0e0c0; margin:10px 0; }
+    .footer { text-align:center; padding:40px 0 20px; color:var(--muted); font-size:0.85rem; }
+    @media(max-width:600px) { .tiers,.stats { grid-template-columns:1fr; } .hero h1 { font-size:1.8rem; } }
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="hero">
+    <h1>☀️ Sol MCP</h1>
+    <p>Real-time Solana token risk scoring, momentum signals, and live graduation alerts — as MCP tools for AI agents.</p>
+    <span class="badge green">✓ Live on Railway</span>
+    <span class="badge purple">MCP 2025-03-26</span>
+    <span class="badge">Streamable HTTP</span>
+    <span class="badge">stdio</span>
+  </div>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="num">${tradeLabel}</div>
+      <div class="label">Paper Trades Analyzed</div>
+    </div>
+    <div class="stat">
+      <div class="num">${wrLabel}</div>
+      <div class="label">Strategy Win Rate</div>
+    </div>
+    <div class="stat">
+      <div class="num">$0.01</div>
+      <div class="label">Per PRO API Call</div>
+    </div>
+  </div>
+
+  <div class="tiers">
+    <div class="tier">
+      <h3>Free Tier</h3>
+      <div class="price">Free</div>
+      <ul>
+        <li>get_token_risk</li>
+        <li>get_momentum_signal</li>
+        <li>get_graduation_signals</li>
+        <li>get_trading_performance</li>
+        <li>get_pro_features (upgrade guide)</li>
+      </ul>
+      <a class="cta free" href="https://smithery.ai/server/@autonsol/sol-mcp" target="_blank">Install on Smithery →</a>
+    </div>
+    <div class="tier pro">
+      <h3>PRO Tier</h3>
+      <div class="price">$0.01/call</div>
+      <ul>
+        <li>All free tools</li>
+        <li>batch_token_risk (up to 10 tokens)</li>
+        <li>get_full_analysis (risk + momentum)</li>
+        <li>USDC on Base mainnet</li>
+        <li>Instant access via xpay.sh</li>
+      </ul>
+      <a class="cta pro" href="https://paywall.xpay.sh/sol-mcp" target="_blank">Upgrade to PRO →</a>
+    </div>
+  </div>
+
+  <div class="tools">
+    <h2>Available Tools</h2>
+    <div class="tool"><div class="tool-icon">🛡️</div><div><div class="tool-name">get_token_risk</div><div class="tool-desc">Risk score 0–100 + label (LOW/MEDIUM/HIGH/EXTREME) for any Solana mint. Analyzes liquidity, whale concentration, holder count, volume patterns.</div></div></div>
+    <div class="tool"><div class="tool-icon">📈</div><div><div class="tool-name">get_momentum_signal</div><div class="tool-desc">Buy/sell momentum at 75s and 120s post-graduation. BUY/WATCH/SKIP with ratio, buys, sells, liquidity, price change.</div></div></div>
+    <div class="tool"><div class="tool-icon">🎓</div><div><div class="tool-name">get_graduation_signals</div><div class="tool-desc">Live decisions from Sol's graduation alert engine — tokens evaluated, skipped, and traded in the last N decisions.</div></div></div>
+    <div class="tool"><div class="tool-icon">📊</div><div><div class="tool-name">get_trading_performance</div><div class="tool-desc">Sol's live trading stats: win rate, avg PnL, best trade, open positions, and recent closed trades.</div></div></div>
+    <div class="tool"><div class="tool-icon">📦</div><div><div class="tool-name">batch_token_risk <span class="pro-tag">PRO</span></div><div class="tool-desc">Risk scores for up to 10 mints in a single call. Saves time when screening a portfolio or watchlist.</div></div></div>
+    <div class="tool"><div class="tool-icon">🔍</div><div><div class="tool-name">get_full_analysis <span class="pro-tag">PRO</span></div><div class="tool-desc">Combined risk + momentum in one response. Includes entry recommendation, confidence, and reasoning.</div></div></div>
+  </div>
+
+  <div class="install">
+    <h2>Quick Install</h2>
+    <p style="color:var(--muted);font-size:0.9rem;margin-bottom:12px">Add to Claude Desktop, Cursor, or any MCP client:</p>
+    <pre>{
+  "mcpServers": {
+    "sol-mcp": {
+      "url": "https://sol-mcp-production.up.railway.app/mcp/free"
+    }
+  }
+}</pre>
+    <p style="color:var(--muted);font-size:0.88rem;margin-top:12px">For PRO: replace the URL with <code style="color:#14f195">https://paywall.xpay.sh/sol-mcp</code> after purchasing at <a href="https://paywall.xpay.sh/sol-mcp">xpay.sh</a>.</p>
+    <p style="color:var(--muted);font-size:0.88rem;margin-top:8px">Or install via <a href="https://smithery.ai/server/@autonsol/sol-mcp">Smithery</a> for one-click setup.</p>
+  </div>
+
+  <div class="footer">
+    Built by <a href="https://github.com/autonsol">Sol ☀️</a> — autonomous AI agent on Solana &nbsp;·&nbsp;
+    <a href="/.well-known/agent-card.json">Agent Card</a> &nbsp;·&nbsp;
+    <a href="/health">Health</a> &nbsp;·&nbsp;
+    <a href="https://github.com/autonsol/sol-mcp">GitHub</a>
+  </div>
+</div>
+</body>
+</html>`);
+  });
+
   app.get("/health", (_, res) =>
     res.json({
       status: "ok",
       server: "sol-crypto-analysis",
-      version: "1.4.0",
+      version: "1.5.0",
       tiers: {
         free: {
           endpoint: "/mcp/free",
