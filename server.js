@@ -50,7 +50,7 @@ async function fetchMomentum(mint) {
 function createMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis",
-    version: "1.6.0",
+    version: "1.7.0",
     description:
       "PRO tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
       "All 6 tools including batch analysis + full BUY signal token identities. $0.01/call via xpay.sh (USDC, Base mainnet). " +
@@ -448,7 +448,7 @@ function createMcpServer() {
 function createFreeMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis-free",
-    version: "1.6.0",
+    version: "1.7.0",
     description:
       "FREE tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
       "5 free tools. BUY signal token details are PRO-only (free tier shows risk/momentum hints, not mints). " +
@@ -620,8 +620,8 @@ function createFreeMcpServer() {
 
   server.tool(
     "get_trading_performance",
-    "[FREE] Get Sol's live trading performance stats and recent closed trades. " +
-      "Shows win rate, total PnL, ROI, and the most recent trade outcomes. " +
+    "[FREE] Get Sol's live trading performance stats, signal accuracy (paper trades), and recent closed trades. " +
+      "Shows real capital win rate, PnL, ROI, plus paper trade signal validation stats (101+ trades). " +
       "Sol trades pump.fun graduating tokens on Solana using a risk + momentum strategy.",
     {
       recent_count: z.number().int().min(1).max(20).default(5)
@@ -630,18 +630,28 @@ function createFreeMcpServer() {
     { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     async ({ recent_count }) => {
       try {
-        const res = await fetch(`${GRAD_ALERT_API}/real-trades?limit=${recent_count}`);
-        if (!res.ok) throw new Error(`Trading API error: ${res.status}`);
-        const data = await res.json();
+        // Fetch both real and paper trade stats in parallel
+        const [realRes, paperRes] = await Promise.all([
+          fetch(`${GRAD_ALERT_API}/real-trades?limit=${recent_count}`),
+          fetch(`${GRAD_ALERT_API}/paper-trades?limit=5`),
+        ]);
+        if (!realRes.ok) throw new Error(`Trading API error: ${realRes.status}`);
+        const data = await realRes.json();
+        const paperData = paperRes.ok ? await paperRes.json() : null;
+
         const st = data.stats ?? {};
         let text =
-          `Sol Trading Performance (real capital, ${data.mode ?? "?"})\n` +
-          `${"─".repeat(50)}\n` +
+          `Sol Trading Performance\n` +
+          `${"═".repeat(50)}\n\n` +
+          `── REAL CAPITAL (on-chain, Solana) ──\n` +
           `Total Trades: ${st.total_trades ?? 0}\n` +
           `Win Rate: ${st.win_rate_pct != null ? st.win_rate_pct.toFixed(1) + "%" : "N/A"} ` +
           `(${st.wins ?? 0}W / ${st.losses ?? 0}L)\n` +
           `Total PnL: ${st.total_pnl_sol != null ? (st.total_pnl_sol > 0 ? "+" : "") + st.total_pnl_sol.toFixed(4) : "?"} SOL\n` +
-          `ROI: ${st.roi_pct != null ? (st.roi_pct > 0 ? "+" : "") + st.roi_pct.toFixed(2) + "%" : "?"}\n`;
+          `ROI: ${st.roi_pct != null ? (st.roi_pct > 0 ? "+" : "") + st.roi_pct.toFixed(2) + "%" : "?"}\n` +
+          `Note: Real WR reflects early strategy iteration + slippage on new memecoins.\n` +
+          `      See signal accuracy below for true predictive quality.\n`;
+
         const closed = data.recent_closed ?? [];
         if (closed.length > 0) {
           text += `\nRecent Closed Trades:\n`;
@@ -654,9 +664,36 @@ function createFreeMcpServer() {
             text += `  ${icon} ${ts} UTC | risk=${t.risk_score ?? "?"} | ${pnl} (${mult}) | exit=${t.exit_reason ?? "?"}\n`;
           }
         }
+
+        // Paper trade signal accuracy section
+        if (paperData) {
+          const ps = paperData.stats ?? {};
+          const rb = paperData.risk_breakdown ?? {};
+          const core = rb.core_risk_31_to_65 ?? {};
+          const exp70 = rb.risk70_paper_experiment ?? {};
+          text += `\n── SIGNAL ACCURACY (Paper Validation) ──\n`;
+          text +=
+            `Strategy validated on ${ps.total_trades ?? "?"} paper trades (same signals, no execution friction)\n` +
+            `Overall Win Rate: ${ps.win_rate_pct != null ? ps.win_rate_pct.toFixed(1) + "%" : "?"} ` +
+            `(${ps.wins ?? 0}W / ${ps.losses ?? 0}L)\n`;
+          if (core.trades > 0) {
+            text +=
+              `Core strategy (risk 31-65): ${core.win_rate_pct != null ? core.win_rate_pct.toFixed(1) + "%" : "?"}` +
+              ` WR — ${core.trades} trades, best +${core.best_pct?.toFixed(1)}%\n`;
+          }
+          if (exp70.trades >= 10) {
+            const verdict = exp70.verdict ?? "PENDING";
+            const statusIcon = verdict === "EXPAND_THRESHOLD" ? "🚀" : verdict === "REJECT" ? "🚫" : "🔬";
+            text +=
+              `Risk-70 expansion test: ${exp70.win_rate_pct != null ? exp70.win_rate_pct.toFixed(1) + "%" : "?"}` +
+              ` WR — ${exp70.trades} trades ${statusIcon} ${verdict}\n`;
+          }
+        }
+
         text +=
           `\n─────────────────────────────────────\n` +
-          `⚡ Want to follow these signals yourself? PRO tools:\n` +
+          `⚡ Follow LIVE signals in real time — PRO tools:\n` +
+          `  get_graduation_signals: see BUY signal tokens revealed (mints hidden in free)\n` +
           `  get_full_analysis: risk + momentum for any token in 1 call\n` +
           `  batch_token_risk: screen 10 tokens at once\n` +
           `  → paywall.xpay.sh/sol-mcp ($0.01/call USDC)`;
@@ -814,7 +851,7 @@ if (isHttp) {
         "momentum signals, and pump.fun graduation trading with verifiable on-chain track record. " +
         "Every trade is logged and publicly auditable. Cross-chain: Solana execution + EVM trust layer (ERC-8004).",
       url: "https://sol-mcp-production.up.railway.app",
-      version: "1.5.0",
+      version: "1.7.0",
       capabilities: {
         streaming: false,
         pushNotifications: false,
@@ -1084,7 +1121,7 @@ if (isHttp) {
     res.json({
       status: "ok",
       server: "sol-crypto-analysis",
-      version: "1.5.0",
+      version: "1.7.0",
       tiers: {
         free: {
           endpoint: "/mcp/free",
