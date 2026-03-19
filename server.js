@@ -50,11 +50,11 @@ async function fetchMomentum(mint) {
 function createMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis",
-    version: "1.5.0",
+    version: "1.6.0",
     description:
       "PRO tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
-      "All 6 tools including batch analysis. $0.01/call via xpay.sh (USDC, Base mainnet). " +
-      "FREE tier available at /mcp/free (5 tools including get_pro_features, no cost).",
+      "All 6 tools including batch analysis + full BUY signal token identities. $0.01/call via xpay.sh (USDC, Base mainnet). " +
+      "FREE tier at /mcp/free (5 tools, BUY signal mints hidden).",
   });
 
   // Tool: get_token_risk
@@ -448,10 +448,11 @@ function createMcpServer() {
 function createFreeMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis-free",
-    version: "1.5.0",
+    version: "1.6.0",
     description:
       "FREE tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
-      "Includes 4 tools. Upgrade to PRO (via paywall.xpay.sh/sol-mcp) for batch_token_risk and get_full_analysis ($0.01/call USDC).",
+      "5 free tools. BUY signal token details are PRO-only (free tier shows risk/momentum hints, not mints). " +
+      "Upgrade at paywall.xpay.sh/sol-mcp ($0.01/call USDC) to unlock all signals + batch analysis.",
   });
 
   // Register all 4 free tools by re-using the full server's tool definitions.
@@ -537,13 +538,14 @@ function createFreeMcpServer() {
   server.tool(
     "get_graduation_signals",
     "[FREE] Get recent token graduation signal decisions from Sol's on-chain analysis engine. " +
-      "Shows which pump.fun tokens were flagged as BUY or SKIP, with full reasoning. " +
-      "BUY signals have risk ≤65 and strong momentum (2.0–3.0× ratio depending on risk tier).",
+      "Shows SKIP decisions with full reasoning (why tokens were rejected). " +
+      "BUY signal token details are PRO-only — free tier shows count + risk/momentum hints. " +
+      "Upgrade at paywall.xpay.sh/sol-mcp ($0.01/call USDC) to see buy signal mints.",
     {
       limit: z.number().int().min(1).max(50).default(10)
         .describe("Number of recent decisions to return (1–50). Default: 10."),
-      filter: z.enum(["all", "trade", "skip"]).default("all")
-        .describe("Filter: 'trade' (BUY signals only), 'skip' (filtered out), or 'all'."),
+      filter: z.enum(["all", "skip"]).default("all")
+        .describe("Filter: 'skip' (rejected tokens with full reasoning) or 'all' (includes redacted BUY signals)."),
     },
     { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     async ({ limit, filter }) => {
@@ -553,41 +555,62 @@ function createFreeMcpServer() {
         if (!res.ok) throw new Error(`Grad-alert API error: ${res.status}`);
         const data = await res.json();
         const decisions = data.decisions ?? [];
-        const filtered = filter === "all" ? decisions
-          : decisions.filter((d) => filter === "trade" ? d.decision === "TRADE" : d.decision === "SKIP");
         const s = data.summary ?? {};
+
+        // Free tier: always show all for filtering, but redact TRADE details
+        const filtered = filter === "skip"
+          ? decisions.filter((d) => d.decision === "SKIP")
+          : decisions;
+
         let text =
           `Sol Graduation Signal Decisions (${data.version ?? "v?"}, ${data.agent_id ?? "sol"})\n` +
           `Generated: ${data.generated_at ?? "unknown"}\n` +
-          `Total: ${s.total_decisions ?? 0} decisions — ${s.trades ?? 0} TRADES, ${s.skips ?? 0} SKIPS\n`;
+          `Total: ${s.total_decisions ?? 0} decisions — ${s.trades ?? 0} TRADE signals, ${s.skips ?? 0} SKIPS\n`;
         if (s.win_rate_pct != null) text += `Live Win Rate: ${s.win_rate_pct.toFixed(1)}%\n`;
-        text += `\n${"─".repeat(55)}\n`;
+
         const tradeCount = filtered.filter(d => d.decision === "TRADE").length;
+        if (tradeCount > 0) {
+          text += `\n⚠️  ${tradeCount} BUY signal${tradeCount > 1 ? "s" : ""} in this batch — token details are PRO-only (see below)\n`;
+        }
+        text += `\n${"─".repeat(55)}\n`;
+
         if (filtered.length === 0) {
-          text += `No ${filter === "all" ? "" : filter + " "}decisions found in last ${limit} records.`;
+          text += `No decisions found in last ${limit} records.`;
         } else {
           for (const d of filtered) {
             const ts = d.timestamp
               ? new Date(d.timestamp).toISOString().slice(0, 16).replace("T", " ") : "?";
-            const icon = d.decision === "TRADE" ? "🟢" : "🔴";
             const inp = d.inputs ?? {};
-            text += `\n${icon} ${d.decision}  ${ts} UTC\n`;
-            text += `  Token: ${inp.token ?? "?"} (${(inp.mint ?? "").slice(0, 12)}...)\n`;
-            text += `  Risk: ${inp.risk_score ?? "?"}/100`;
-            if (inp.momentum_ratio != null)
-              text += `  Momentum: ${inp.momentum_ratio}× (buys ${inp.momentum_buys ?? "?"}/${(inp.momentum_buys ?? 0) + (inp.momentum_sells ?? 0)} total)`;
-            text += `\n`;
-            if (d.reasoning) text += `  Reason: ${d.reasoning}\n`;
+
+            if (d.decision === "TRADE") {
+              // Redact BUY signals in free tier — tease risk/momentum but hide token identity
+              text += `\n🔒 [PRO] TRADE SIGNAL  ${ts} UTC\n`;
+              text += `  Risk: ${inp.risk_score ?? "?"}/100`;
+              if (inp.momentum_ratio != null)
+                text += `  Momentum: ${inp.momentum_ratio}× (${inp.momentum_buys ?? "?"}B/${inp.momentum_sells ?? "?"}S)`;
+              text += `\n  Token: [hidden — upgrade to unlock]\n`;
+              text += `  → paywall.xpay.sh/sol-mcp ($0.01/call USDC)\n`;
+            } else {
+              // Full SKIP decision shown — these are the rejects, no trading value
+              text += `\n🔴 SKIP  ${ts} UTC\n`;
+              text += `  Token: ${inp.token ?? "?"} (${(inp.mint ?? "").slice(0, 12)}...)\n`;
+              text += `  Risk: ${inp.risk_score ?? "?"}/100`;
+              if (inp.momentum_ratio != null)
+                text += `  Momentum: ${inp.momentum_ratio}× (${inp.momentum_buys ?? "?"}B/${inp.momentum_sells ?? "?"}S)`;
+              text += `\n`;
+              if (d.reasoning) text += `  Reason: ${d.reasoning}\n`;
+            }
           }
         }
-        if (tradeCount > 0) {
-          text +=
-            `\n─────────────────────────────────────\n` +
-            `⚡ ${tradeCount} BUY signal${tradeCount > 1 ? "s" : ""} above — screen the mints faster with PRO:\n` +
-            `  batch_token_risk: risk scores for 10 tokens in 1 call\n` +
-            `  get_full_analysis: risk + momentum for any token in 1 call\n` +
-            `  → paywall.xpay.sh/sol-mcp ($0.01/call USDC, Base mainnet)`;
-        }
+
+        text +=
+          `\n${"═".repeat(55)}\n` +
+          `🔒 PRO TIER — Unlock BUY signal token identities\n` +
+          `  All TRADE signal mints revealed in real time\n` +
+          `  batch_token_risk: score 10 tokens in 1 call\n` +
+          `  get_full_analysis: risk + momentum combined\n` +
+          `  $0.01/call USDC → paywall.xpay.sh/sol-mcp`;
+
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
@@ -662,9 +685,11 @@ function createFreeMcpServer() {
         `FREE tools (available now):\n` +
         `  ✅ get_token_risk         — risk score for 1 token\n` +
         `  ✅ get_momentum_signal    — buy/sell momentum for 1 token\n` +
-        `  ✅ get_graduation_signals — Sol's live BUY/SKIP decisions\n` +
+        `  ✅ get_graduation_signals — SKIP decisions + redacted BUY hints\n` +
         `  ✅ get_trading_performance — win rate, PnL, recent trades\n\n` +
-        `PRO-only tools (unlock at paywall.xpay.sh/sol-mcp):\n` +
+        `PRO-only features (unlock at paywall.xpay.sh/sol-mcp):\n` +
+        `  🔒 BUY signal mints REVEALED — see the actual token + mint for every\n` +
+        `     TRADE signal in get_graduation_signals (free tier hides these)\n` +
         `  🔒 batch_token_risk      — risk scores for 10 tokens in 1 call\n` +
         `     → saves 9 API calls when screening a watchlist\n` +
         `  🔒 get_full_analysis     — risk + momentum combined in 1 call\n` +
