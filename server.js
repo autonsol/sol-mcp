@@ -11,7 +11,7 @@
  *   - get_trading_performance: Live trading stats (win rate, PnL, recent trades)
  * 
  * Tiers:
- *   FREE  → /mcp/free   — 6 tools (get_token_risk, get_momentum_signal,
+ *   FREE  → /mcp/free   — 7 tools (get_token_risk, get_momentum_signal, get_market_pulse,
  *                           get_graduation_signals, get_trading_performance,
  *                           get_alpha_leaderboard, get_pro_features)
  *   PRO   → /mcp        — All 6 tools via xpay.sh paywall ($0.01/call)
@@ -51,7 +51,7 @@ async function fetchMomentum(mint) {
 function createMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis",
-    version: "1.8.0",
+    version: "1.9.0",
     description:
       "PRO tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
       "All 6 tools including batch analysis + full BUY signal token identities. $0.01/call via xpay.sh (USDC, Base mainnet). " +
@@ -449,7 +449,7 @@ function createMcpServer() {
 function createFreeMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis-free",
-    version: "1.8.0",
+    version: "1.9.0",
     description:
       "FREE tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
       "5 free tools. BUY signal token details are PRO-only (free tier shows risk/momentum hints, not mints). " +
@@ -621,9 +621,10 @@ function createFreeMcpServer() {
 
   server.tool(
     "get_trading_performance",
-    "[FREE] Get Sol's live trading performance stats, signal accuracy (paper trades), and recent closed trades. " +
-      "Shows real capital win rate, PnL, ROI, plus paper trade signal validation stats (101+ trades). " +
-      "Sol trades pump.fun graduating tokens on Solana using a risk + momentum strategy.",
+    "[FREE] Get Sol's live signal accuracy stats and trading performance. " +
+      "Leads with paper validation (130+ trades, same signals, zero execution noise) then real capital results. " +
+      "Sol trades pump.fun graduating tokens using a risk + momentum strategy — 60.5% WR on risk-70 expansion. " +
+      "Useful for evaluating signal quality and understanding strategy edge.",
     {
       recent_count: z.number().int().min(1).max(20).default(5)
         .describe("Number of recent closed trades to show (1–20). Default: 5."),
@@ -640,64 +641,63 @@ function createFreeMcpServer() {
         const data = await realRes.json();
         const paperData = paperRes.ok ? await paperRes.json() : null;
 
-        const st = data.stats ?? {};
-        let text =
-          `Sol Trading Performance\n` +
-          `${"═".repeat(50)}\n\n` +
-          `── REAL CAPITAL (on-chain, Solana) ──\n` +
-          `Total Trades: ${st.total_trades ?? 0}\n` +
-          `Win Rate: ${st.win_rate_pct != null ? st.win_rate_pct.toFixed(1) + "%" : "N/A"} ` +
-          `(${st.wins ?? 0}W / ${st.losses ?? 0}L)\n` +
-          `Total PnL: ${st.total_pnl_sol != null ? (st.total_pnl_sol > 0 ? "+" : "") + st.total_pnl_sol.toFixed(4) : "?"} SOL\n` +
-          `ROI: ${st.roi_pct != null ? (st.roi_pct > 0 ? "+" : "") + st.roi_pct.toFixed(2) + "%" : "?"}\n` +
-          `Note: Real WR reflects early strategy iteration + slippage on new memecoins.\n` +
-          `      See signal accuracy below for true predictive quality.\n`;
+        let text = `Sol Signal Performance Dashboard\n${"═".repeat(50)}\n\n`;
 
-        const closed = data.recent_closed ?? [];
-        if (closed.length > 0) {
-          text += `\nRecent Closed Trades:\n`;
-          for (const t of closed) {
-            const icon = t.exit_reason === "TP" ? "✅" : "❌";
-            const pnl = t.pnl_sol != null ? `${t.pnl_sol > 0 ? "+" : ""}${t.pnl_sol.toFixed(4)} SOL` : "?";
-            const mult = t.multiple_x != null ? `${t.multiple_x.toFixed(2)}×` : "?";
-            const ts = t.entry_time
-              ? new Date(t.entry_time).toISOString().slice(0, 16).replace("T", " ") : "?";
-            text += `  ${icon} ${ts} UTC | risk=${t.risk_score ?? "?"} | ${pnl} (${mult}) | exit=${t.exit_reason ?? "?"}\n`;
-          }
-        }
-
-        // Paper trade signal accuracy section
+        // Lead with paper validation (clean signal quality metric)
         if (paperData) {
           const ps = paperData.stats ?? {};
           const rb = paperData.risk_breakdown ?? {};
           const core = rb.core_risk_31_to_65 ?? {};
-          const exp70 = rb.risk70_paper_experiment ?? {};
-          text += `\n── SIGNAL ACCURACY (Paper Validation) ──\n`;
+          const exp70 = rb.experiment_risk_66_to_75 ?? {};
+          text += `── SIGNAL ACCURACY (Paper Validation — ${ps.total_trades ?? "?"} trades) ──\n`;
           text +=
-            `Strategy validated on ${ps.total_trades ?? "?"} paper trades (same signals, no execution friction)\n` +
             `Overall Win Rate: ${ps.win_rate_pct != null ? ps.win_rate_pct.toFixed(1) + "%" : "?"} ` +
             `(${ps.wins ?? 0}W / ${ps.losses ?? 0}L)\n`;
+          if (ps.best_trade_pct != null) {
+            text += `Best Signal: +${ps.best_trade_pct >= 1000 ? (ps.best_trade_pct / 1000).toFixed(0) + "K" : ps.best_trade_pct.toFixed(0)}% 🚀\n`;
+          }
           if (core.trades > 0) {
             text +=
               `Core strategy (risk 31-65): ${core.win_rate_pct != null ? core.win_rate_pct.toFixed(1) + "%" : "?"}` +
-              ` WR — ${core.trades} trades, best +${core.best_pct?.toFixed(1)}%\n`;
+              ` WR — ${core.trades} trades, best +${core.best_pct != null ? (core.best_pct >= 1000 ? (core.best_pct/1000).toFixed(0)+"K" : core.best_pct.toFixed(0)) : "?"}%\n`;
           }
           if (exp70.trades >= 10) {
-            const verdict = exp70.verdict ?? "PENDING";
-            const statusIcon = verdict === "EXPAND_THRESHOLD" ? "🚀" : verdict === "REJECT" ? "🚫" : "🔬";
             text +=
-              `Risk-70 expansion test: ${exp70.win_rate_pct != null ? exp70.win_rate_pct.toFixed(1) + "%" : "?"}` +
-              ` WR — ${exp70.trades} trades ${statusIcon} ${verdict}\n`;
+              `Risk-70 expansion: ${exp70.win_rate_pct != null ? exp70.win_rate_pct.toFixed(1) + "%" : "?"}` +
+              ` WR — ${exp70.trades} trades 🚀 LIVE on real capital\n` +
+              `  avg signal return: +${exp70.avg_pnl_pct != null ? (exp70.avg_pnl_pct >= 1000 ? (exp70.avg_pnl_pct/1000).toFixed(1)+"K" : exp70.avg_pnl_pct.toFixed(1)) : "?"}%\n`;
+          }
+          text += `Note: Paper stats = same entry signals, no swap execution friction.\n`;
+        }
+
+        // Real capital section (honest but contextualized)
+        const st = data.stats ?? {};
+        text +=
+          `\n── REAL CAPITAL (on-chain, Solana) ──\n` +
+          `Trades: ${st.total_trades ?? 0} | WR: ${st.win_rate_pct != null ? st.win_rate_pct.toFixed(1) + "%" : "N/A"} ` +
+          `(${st.wins ?? 0}W / ${st.losses ?? 0}L)\n` +
+          `PnL: ${st.total_pnl_sol != null ? (st.total_pnl_sol > 0 ? "+" : "") + st.total_pnl_sol.toFixed(4) : "?"} SOL` +
+          ` | Best trade: ${st.best_trade_sol != null ? "+" + st.best_trade_sol.toFixed(4) : "?"} SOL\n` +
+          `Note: Strategy iterating — v5.11 live (risk-70 expansion, liq-crash filter, CB protection).\n`;
+
+        const closed = data.recent_closed ?? [];
+        if (closed.length > 0) {
+          text += `\nRecent Trades:\n`;
+          for (const t of closed.slice(0, recent_count)) {
+            const icon = t.exit_reason === "TP" ? "✅" : "❌";
+            const pnl = t.pnl_sol != null ? `${t.pnl_sol > 0 ? "+" : ""}${t.pnl_sol.toFixed(4)} SOL` : "?";
+            const hold = t.hold_mins != null ? `${t.hold_mins}min` : "?";
+            text += `  ${icon} risk=${t.risk_score ?? "?"} | ${pnl} | held ${hold} | ${t.exit_reason ?? "?"}\n`;
           }
         }
 
         text +=
           `\n─────────────────────────────────────\n` +
-          `⚡ Follow LIVE signals in real time — PRO tools:\n` +
-          `  get_graduation_signals: see BUY signal tokens revealed (mints hidden in free)\n` +
-          `  get_full_analysis: risk + momentum for any token in 1 call\n` +
-          `  batch_token_risk: screen 10 tokens at once\n` +
-          `  → paywall.xpay.sh/sol-mcp ($0.01/call USDC)`;
+          `⚡ Act on the signals — PRO unlocks:\n` +
+          `  🔒 get_graduation_signals: BUY signal MINTS revealed (free hides them)\n` +
+          `  🔒 get_full_analysis: risk + momentum in 1 call\n` +
+          `  🔒 batch_token_risk: screen 10 tokens at once\n` +
+          `  → paywall.xpay.sh/sol-mcp ($0.01/call USDC, no subscription)`;
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
@@ -725,7 +725,7 @@ function createFreeMcpServer() {
         const trades = data.recent_closed ?? [];
         const ps = data.stats ?? {};
         const rb = data.risk_breakdown ?? {};
-        const exp70 = rb.risk70_paper_experiment ?? {};
+        const exp70 = rb.experiment_risk_66_to_75 ?? {};
         const core = rb.core_risk_31_to_65 ?? {};
 
         // Sort by pnl_pct for leaderboard
@@ -748,8 +748,7 @@ function createFreeMcpServer() {
           text += `Core signals (risk 31-65): ${core.win_rate_pct != null ? core.win_rate_pct.toFixed(1) + "%" : "?"}% WR — ${core.trades} trades\n`;
         }
         if (exp70.trades >= 10) {
-          const icon = exp70.verdict === "EXPAND_THRESHOLD" ? "🚀" : "🔬";
-          text += `Risk-70 expansion: ${exp70.win_rate_pct != null ? exp70.win_rate_pct.toFixed(1) + "%" : "?"}% WR — ${exp70.trades} trades ${icon} VALIDATED\n`;
+          text += `Risk-70 expansion: ${exp70.win_rate_pct != null ? exp70.win_rate_pct.toFixed(1) + "%" : "?"}% WR — ${exp70.trades} trades 🚀 LIVE\n`;
         }
         text += `\n`;
 
@@ -802,6 +801,113 @@ function createFreeMcpServer() {
     }
   );
 
+  // Tool: get_market_pulse (free tier — live market activity snapshot)
+  server.tool(
+    "get_market_pulse",
+    "[FREE] Get a live snapshot of the Solana pump.fun graduation market right now. " +
+      "Shows current signal frequency, buy/sell momentum distribution, and whether the market is hot or cold. " +
+      "Tells you the last BUY signal (without mint — PRO reveals it) and time since last actionable signal. " +
+      "Great for deciding when to be attentive to graduation signals.",
+    {},
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    async () => {
+      try {
+        const [decisionsRes, healthRes] = await Promise.all([
+          fetch(`${GRAD_ALERT_API}/decisions`),
+          fetch(`${GRAD_ALERT_API}/health`),
+        ]);
+        if (!decisionsRes.ok) throw new Error(`Decisions API error: ${decisionsRes.status}`);
+        const decisionsData = await decisionsRes.json();
+        const healthData = healthRes.ok ? await healthRes.json() : null;
+
+        const decisions = decisionsData.decisions ?? [];
+        const now = Date.now();
+        const oneHourAgo = now - 3600 * 1000;
+
+        // Recent activity (last hour)
+        const recent = decisions.filter(d => new Date(d.timestamp).getTime() > oneHourAgo);
+        const trades = recent.filter(d => d.decision === "TRADE");
+        const skips = recent.filter(d => d.decision === "SKIP");
+
+        // Most recent BUY signal (TRADE decision)
+        const allTrades = decisions.filter(d => d.decision === "TRADE");
+        const lastTrade = allTrades.length > 0 ? allTrades[allTrades.length - 1] : null;
+
+        // Momentum quality of recent signals
+        const withMomentum = recent.filter(d => d.inputs?.momentum_ratio != null);
+        const avgMomentum = withMomentum.length > 0
+          ? withMomentum.reduce((s, d) => s + d.inputs.momentum_ratio, 0) / withMomentum.length
+          : null;
+
+        // Skip reason breakdown
+        const skipReasons = skips.reduce((acc, d) => {
+          const r = d.skip_reason ?? d.reasoning?.slice(0, 30) ?? "unknown";
+          acc[r] = (acc[r] ?? 0) + 1;
+          return acc;
+        }, {});
+
+        // Market temperature
+        let temp = "🟡 NORMAL";
+        const tradeRate = recent.length > 0 ? trades.length / recent.length : 0;
+        if (tradeRate > 0.2) temp = "🔥 HOT";
+        else if (tradeRate < 0.05 || recent.length < 3) temp = "🧊 QUIET";
+
+        let text =
+          `Sol Market Pulse — ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC\n` +
+          `${"═".repeat(50)}\n\n` +
+          `Market Temperature: ${temp}\n` +
+          `Last hour activity: ${recent.length} tokens analyzed\n` +
+          `  → BUY signals: ${trades.length}\n` +
+          `  → Skipped: ${skips.length}\n`;
+
+        if (avgMomentum != null) {
+          text += `Avg momentum ratio (recent): ${avgMomentum.toFixed(2)}× buy/sell\n`;
+        }
+
+        if (Object.keys(skipReasons).length > 0) {
+          text += `\nWhy tokens are being skipped:\n`;
+          for (const [reason, count] of Object.entries(skipReasons).sort((a, b) => b[1] - a[1])) {
+            text += `  ${reason}: ${count}\n`;
+          }
+        }
+
+        if (lastTrade) {
+          const msAgo = now - new Date(lastTrade.timestamp).getTime();
+          const minsAgo = Math.round(msAgo / 60000);
+          const inp = lastTrade.inputs ?? {};
+          text +=
+            `\n🚨 Most Recent BUY Signal\n` +
+            `  ${minsAgo < 60 ? minsAgo + " min ago" : Math.round(minsAgo/60) + " hr ago"} | ` +
+            `risk=${inp.risk_score ?? "?"} | momentum ${inp.momentum_ratio != null ? inp.momentum_ratio.toFixed(2) + "×" : "?"}\n` +
+            `  Token: 🔒 [PRO reveals mint + name]\n` +
+            `  Target: ${inp.target_multiple != null ? inp.target_multiple + "×" : "?"} | ` +
+            `SL: ${inp.stop_loss_pct != null ? (inp.stop_loss_pct * 100).toFixed(0) + "%" : "?"}\n`;
+        } else {
+          text += `\nNo BUY signals in the last 50 decisions (market quiet or filters strict).\n`;
+        }
+
+        if (healthData) {
+          const cb = healthData.circuit_breaker ?? {};
+          const ws = healthData.ws ?? {};
+          text +=
+            `\nSystem Status:\n` +
+            `  Circuit breaker: ${cb.paused ? `⏸️ PAUSED (${cb.remainingMin}min remaining)` : "✅ Active"}\n` +
+            `  WS feed: ${ws.status === "active" ? "✅ Live" : "⚠️ " + ws.status}\n` +
+            `  Last event: ${ws.lastEventAgoSec != null ? ws.lastEventAgoSec + "s ago" : "?"}\n`;
+        }
+
+        text +=
+          `\n─────────────────────────────────────────────────\n` +
+          `🔒 BUY signal mints are PRO-only. One correct entry pays for 100+ lookups.\n` +
+          `   → paywall.xpay.sh/sol-mcp ($0.01/call USDC, Base mainnet)\n`;
+
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
   // Tool: get_pro_features (free tier conversion hook)
   server.tool(
     "get_pro_features",
@@ -822,6 +928,7 @@ function createFreeMcpServer() {
         `  ✅ get_momentum_signal    — buy/sell momentum for 1 token\n` +
         `  ✅ get_graduation_signals — SKIP decisions + redacted BUY hints\n` +
         `  ✅ get_trading_performance — win rate, PnL, recent trades\n` +
+        `  ✅ get_market_pulse       — live market temperature + last BUY signal (no mint)\n` +
         `  ✅ get_alpha_leaderboard  — best/worst signal outcomes (mints redacted)\n\n` +
         `PRO-only features (unlock at paywall.xpay.sh/sol-mcp):\n` +
         `  🔒 BUY signal mints REVEALED — see the actual token + mint for every\n` +
@@ -950,7 +1057,7 @@ if (isHttp) {
         "momentum signals, and pump.fun graduation trading with verifiable on-chain track record. " +
         "Every trade is logged and publicly auditable. Cross-chain: Solana execution + EVM trust layer (ERC-8004).",
       url: "https://sol-mcp-production.up.railway.app",
-      version: "1.8.0",
+      version: "1.9.0",
       capabilities: {
         streaming: false,
         pushNotifications: false,
@@ -1016,7 +1123,7 @@ if (isHttp) {
         schemes: ["none", "x402"],
         freeTier: {
           endpoint: "https://sol-mcp-production.up.railway.app/mcp/free",
-          tools: ["get_token_risk", "get_momentum_signal", "get_graduation_signals", "get_trading_performance", "get_alpha_leaderboard", "get_pro_features"],
+          tools: ["get_token_risk", "get_momentum_signal", "get_market_pulse", "get_graduation_signals", "get_trading_performance", "get_alpha_leaderboard", "get_pro_features"],
           price: "FREE — no auth required",
         },
         x402: {
@@ -1220,11 +1327,11 @@ if (isHttp) {
     res.json({
       status: "ok",
       server: "sol-crypto-analysis",
-      version: "1.8.0",
+      version: "1.9.0",
       tiers: {
         free: {
           endpoint: "/mcp/free",
-          tools: ["get_token_risk", "get_momentum_signal", "get_graduation_signals", "get_trading_performance", "get_alpha_leaderboard", "get_pro_features"],
+          tools: ["get_token_risk", "get_momentum_signal", "get_market_pulse", "get_graduation_signals", "get_trading_performance", "get_alpha_leaderboard", "get_pro_features"],
           price: "FREE",
         },
         pro: {
