@@ -11,8 +11,9 @@
  *   - get_trading_performance: Live trading stats (win rate, PnL, recent trades)
  * 
  * Tiers:
- *   FREE  → /mcp/free   — 4 tools (get_token_risk, get_momentum_signal,
- *                           get_graduation_signals, get_trading_performance)
+ *   FREE  → /mcp/free   — 6 tools (get_token_risk, get_momentum_signal,
+ *                           get_graduation_signals, get_trading_performance,
+ *                           get_alpha_leaderboard, get_pro_features)
  *   PRO   → /mcp        — All 6 tools via xpay.sh paywall ($0.01/call)
  * 
  * Usage:
@@ -50,7 +51,7 @@ async function fetchMomentum(mint) {
 function createMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis",
-    version: "1.7.0",
+    version: "1.8.0",
     description:
       "PRO tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
       "All 6 tools including batch analysis + full BUY signal token identities. $0.01/call via xpay.sh (USDC, Base mainnet). " +
@@ -443,19 +444,19 @@ function createMcpServer() {
   return server;
 }
 
-// ─── Free Tier Server (4 tools, no paywall) ───────────────────────────────────
+// ─── Free Tier Server (6 tools, no paywall) ───────────────────────────────────
 
 function createFreeMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis-free",
-    version: "1.7.0",
+    version: "1.8.0",
     description:
       "FREE tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
       "5 free tools. BUY signal token details are PRO-only (free tier shows risk/momentum hints, not mints). " +
       "Upgrade at paywall.xpay.sh/sol-mcp ($0.01/call USDC) to unlock all signals + batch analysis.",
   });
 
-  // Register all 4 free tools by re-using the full server's tool definitions.
+  // Register all 6 free tools by re-using the full server's tool definitions.
   // We achieve this by creating the full server and filtering — but it's cleaner
   // to register independently so the description accurately reflects free tier.
 
@@ -704,6 +705,103 @@ function createFreeMcpServer() {
     }
   );
 
+  // Tool: get_alpha_leaderboard (free tier — tease top signal performers)
+  server.tool(
+    "get_alpha_leaderboard",
+    "[FREE] See the best and worst historical signal outcomes from Sol's paper trading validation. " +
+      "Shows top winning and bottom losing signals (token identities redacted — PRO reveals mints). " +
+      "Demonstrates the signal range: from +316,000%+ moonshots to -97% rugs. " +
+      "Use this to understand the risk/reward profile before acting on graduation signals.",
+    {
+      show_count: z.number().int().min(3).max(10).default(5)
+        .describe("Number of top/bottom signals to show (3–10). Default: 5."),
+    },
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    async ({ show_count }) => {
+      try {
+        const res = await fetch(`${GRAD_ALERT_API}/paper-trades`);
+        if (!res.ok) throw new Error(`Paper trades API error: ${res.status}`);
+        const data = await res.json();
+        const trades = data.recent_closed ?? [];
+        const ps = data.stats ?? {};
+        const rb = data.risk_breakdown ?? {};
+        const exp70 = rb.risk70_paper_experiment ?? {};
+        const core = rb.core_risk_31_to_65 ?? {};
+
+        // Sort by pnl_pct for leaderboard
+        const withPnl = trades.filter(t => t.pnl_pct != null);
+        const sorted = [...withPnl].sort((a, b) => b.pnl_pct - a.pnl_pct);
+        const topN = sorted.slice(0, show_count);
+        const botN = sorted.slice(-show_count).reverse();
+
+        const redact = (symbol) => {
+          if (!symbol || symbol.length < 2) return "[REDACTED]";
+          return symbol.slice(0, 3) + "****";
+        };
+
+        let text =
+          `Sol Signal Alpha Leaderboard\n` +
+          `${"═".repeat(50)}\n` +
+          `Paper validation: ${ps.total_trades ?? "?"} trades, ${ps.win_rate_pct != null ? ps.win_rate_pct.toFixed(1) + "%" : "?"} WR overall\n`;
+
+        if (core.trades > 0) {
+          text += `Core signals (risk 31-65): ${core.win_rate_pct != null ? core.win_rate_pct.toFixed(1) + "%" : "?"}% WR — ${core.trades} trades\n`;
+        }
+        if (exp70.trades >= 10) {
+          const icon = exp70.verdict === "EXPAND_THRESHOLD" ? "🚀" : "🔬";
+          text += `Risk-70 expansion: ${exp70.win_rate_pct != null ? exp70.win_rate_pct.toFixed(1) + "%" : "?"}% WR — ${exp70.trades} trades ${icon} VALIDATED\n`;
+        }
+        text += `\n`;
+
+        // Top winners
+        text += `🏆 TOP ${show_count} WINNERS (token mints are PRO-only)\n`;
+        text += `${"─".repeat(50)}\n`;
+        if (topN.length === 0) {
+          text += `  No data yet.\n`;
+        } else {
+          for (let i = 0; i < topN.length; i++) {
+            const t = topN[i];
+            const pct = t.pnl_pct != null ? `+${t.pnl_pct.toFixed(1)}%` : "?";
+            const risk = t.risk_score != null ? `risk=${t.risk_score}` : "";
+            const hold = t.exit_time && t.entry_time
+              ? `${Math.round((new Date(t.exit_time) - new Date(t.entry_time)) / 60000)}min`
+              : "?";
+            const sym = redact(t.symbol);
+            text += `  ${i + 1}. 🔒 ${sym}  ${pct}  (${risk}, held ${hold})\n`;
+          }
+        }
+
+        text += `\n💀 BOTTOM ${show_count} (signals that failed)\n`;
+        text += `${"─".repeat(50)}\n`;
+        if (botN.length === 0) {
+          text += `  No data yet.\n`;
+        } else {
+          for (let i = 0; i < botN.length; i++) {
+            const t = botN[i];
+            const pct = t.pnl_pct != null ? `${t.pnl_pct.toFixed(1)}%` : "?";
+            const risk = t.risk_score != null ? `risk=${t.risk_score}` : "";
+            const hold = t.exit_time && t.entry_time
+              ? `${Math.round((new Date(t.exit_time) - new Date(t.entry_time)) / 60000)}min`
+              : "?";
+            const sym = redact(t.symbol);
+            text += `  ${i + 1}. ❌ ${sym}  ${pct}  (${risk}, held ${hold})\n`;
+          }
+        }
+
+        text +=
+          `\n─────────────────────────────────────────────────\n` +
+          `🔒 Token identities hidden in free tier.\n` +
+          `   PRO reveals the MINT ADDRESS for every BUY signal — past and live.\n` +
+          `   At $0.01/call, one correct trade pays for hundreds of lookups.\n` +
+          `   → paywall.xpay.sh/sol-mcp (USDC, Base mainnet)\n`;
+
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
   // Tool: get_pro_features (free tier conversion hook)
   server.tool(
     "get_pro_features",
@@ -716,14 +814,15 @@ function createFreeMcpServer() {
       const text =
         `Sol MCP — PRO Tier Features\n` +
         `${"═".repeat(45)}\n\n` +
-        `Current tier: FREE (4 tools, no limit)\n` +
+        `Current tier: FREE (5 tools, no limit)\n` +
         `PRO tier: $0.01/call USDC — pay per use, no subscription\n` +
         `Payment: Base mainnet USDC via xpay.sh (EVM wallet needed)\n\n` +
         `FREE tools (available now):\n` +
         `  ✅ get_token_risk         — risk score for 1 token\n` +
         `  ✅ get_momentum_signal    — buy/sell momentum for 1 token\n` +
         `  ✅ get_graduation_signals — SKIP decisions + redacted BUY hints\n` +
-        `  ✅ get_trading_performance — win rate, PnL, recent trades\n\n` +
+        `  ✅ get_trading_performance — win rate, PnL, recent trades\n` +
+        `  ✅ get_alpha_leaderboard  — best/worst signal outcomes (mints redacted)\n\n` +
         `PRO-only features (unlock at paywall.xpay.sh/sol-mcp):\n` +
         `  🔒 BUY signal mints REVEALED — see the actual token + mint for every\n` +
         `     TRADE signal in get_graduation_signals (free tier hides these)\n` +
@@ -851,7 +950,7 @@ if (isHttp) {
         "momentum signals, and pump.fun graduation trading with verifiable on-chain track record. " +
         "Every trade is logged and publicly auditable. Cross-chain: Solana execution + EVM trust layer (ERC-8004).",
       url: "https://sol-mcp-production.up.railway.app",
-      version: "1.7.0",
+      version: "1.8.0",
       capabilities: {
         streaming: false,
         pushNotifications: false,
@@ -917,7 +1016,7 @@ if (isHttp) {
         schemes: ["none", "x402"],
         freeTier: {
           endpoint: "https://sol-mcp-production.up.railway.app/mcp/free",
-          tools: ["get_token_risk", "get_momentum_signal", "get_graduation_signals", "get_trading_performance", "get_pro_features"],
+          tools: ["get_token_risk", "get_momentum_signal", "get_graduation_signals", "get_trading_performance", "get_alpha_leaderboard", "get_pro_features"],
           price: "FREE — no auth required",
         },
         x402: {
@@ -1121,11 +1220,11 @@ if (isHttp) {
     res.json({
       status: "ok",
       server: "sol-crypto-analysis",
-      version: "1.7.0",
+      version: "1.8.0",
       tiers: {
         free: {
           endpoint: "/mcp/free",
-          tools: ["get_token_risk", "get_momentum_signal", "get_graduation_signals", "get_trading_performance", "get_pro_features"],
+          tools: ["get_token_risk", "get_momentum_signal", "get_graduation_signals", "get_trading_performance", "get_alpha_leaderboard", "get_pro_features"],
           price: "FREE",
         },
         pro: {
