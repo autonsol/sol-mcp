@@ -15,6 +15,8 @@ Real-time Solana token risk scoring, momentum signals, and live AI trading decis
 - 💰 **Free tier** — 4 tools, no API key, no login
 - ⚡ **Pay-per-call PRO** — $0.01 USDC/call via [x402](https://x402.org) on Base, no subscriptions
 
+[![Sol — Solana Token Risk & Signals MCP server](https://glama.ai/mcp/servers/autonsol/sol-mcp/badges/card.svg)](https://glama.ai/mcp/servers/autonsol/sol-mcp)
+
 ## Pricing Tiers
 
 | Tier | URL | Tools | Cost |
