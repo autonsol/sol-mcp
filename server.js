@@ -51,7 +51,7 @@ async function fetchMomentum(mint) {
 function createMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis",
-    version: "1.9.0",
+    version: "2.0.0",
     description:
       "PRO tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
       "All 6 tools including batch analysis + full BUY signal token identities. $0.01/call via xpay.sh (USDC, Base mainnet). " +
@@ -441,6 +441,153 @@ function createMcpServer() {
     }
   );
 
+  // Tool: analyze_wallet
+  server.tool(
+    "analyze_wallet",
+    "Analyze all SPL tokens held by a Solana wallet address. " +
+      "Returns a full portfolio risk report — every token with its balance, risk score (0-100), " +
+      "and risk label sorted by danger level (EXTREME first). " +
+      "Use this to audit a wallet before copying trades, check your own exposure, or " +
+      "screen a trader's holdings for rug risk. Analyzes up to 20 tokens per wallet.",
+    {
+      wallet: z
+        .string()
+        .describe("Solana wallet address (base58 encoded public key)."),
+    },
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    async ({ wallet }) => {
+      try {
+        // 1. Fetch all SPL token accounts for this wallet via public Solana RPC
+        const rpcRes = await fetch("https://api.mainnet-beta.solana.com", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "getTokenAccountsByOwner",
+            params: [
+              wallet,
+              { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+              { encoding: "jsonParsed", commitment: "confirmed" },
+            ],
+          }),
+        });
+        const rpcData = await rpcRes.json();
+        if (rpcData.error) throw new Error(`RPC error: ${rpcData.error.message}`);
+
+        const accounts = rpcData.result?.value ?? [];
+        if (accounts.length === 0) {
+          return {
+            content: [{
+              type: "text",
+              text: `No SPL tokens found for wallet: ${wallet}\n\nPossible reasons:\n- Wallet only holds SOL\n- Empty wallet\n- Invalid address`,
+            }],
+          };
+        }
+
+        // 2. Extract mints with non-zero balances (top 20 by amount)
+        const holdings = accounts
+          .map((acc) => {
+            const info = acc.account?.data?.parsed?.info;
+            if (!info) return null;
+            const amount = parseFloat(info.tokenAmount?.uiAmount ?? 0);
+            return amount > 0 ? { mint: info.mint, amount } : null;
+          })
+          .filter(Boolean)
+          .slice(0, 20);
+
+        if (holdings.length === 0) {
+          return {
+            content: [{ type: "text", text: `Wallet ${wallet} has token accounts but all balances are zero.` }],
+          };
+        }
+
+        const mints = holdings.map((h) => h.mint);
+
+        // 3. Batch risk score all mints
+        let riskMap = {};
+        try {
+          const batchRes = await fetch(`${RISK_API}/batch`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mints }),
+          });
+          if (batchRes.ok) {
+            const body = await batchRes.json();
+            const results = body.results ?? body;
+            if (Array.isArray(results)) {
+              for (const r of results) { if (r.mint) riskMap[r.mint] = r; }
+            } else if (typeof results === "object") {
+              riskMap = results;
+            }
+          }
+        } catch (_) {
+          // Batch failed — try individual for first 5
+          for (const mint of mints.slice(0, 5)) {
+            try { riskMap[mint] = await fetchRisk(mint); } catch (_) {}
+          }
+        }
+
+        // 4. Build scored list sorted by risk (highest first)
+        const ORDER = { EXTREME: 0, HIGH: 1, MEDIUM: 2, LOW: 3, UNKNOWN: 4 };
+        const ICONS = { EXTREME: "🔴", HIGH: "🟠", MEDIUM: "🟡", LOW: "🟢", UNKNOWN: "⚪" };
+
+        const scored = holdings
+          .map((h) => {
+            const r = riskMap[h.mint] ?? {};
+            return {
+              mint: h.mint,
+              amount: h.amount,
+              score: r.risk_score ?? r.score ?? null,
+              label: r.risk_label ?? "UNKNOWN",
+              symbol: r.symbol ?? h.mint.slice(0, 8) + "...",
+            };
+          })
+          .sort((a, b) => {
+            const ao = ORDER[a.label] ?? 4;
+            const bo = ORDER[b.label] ?? 4;
+            return ao !== bo ? ao - bo : (b.score ?? 0) - (a.score ?? 0);
+          });
+
+        const extremeCount = scored.filter((s) => s.label === "EXTREME").length;
+        const highCount = scored.filter((s) => s.label === "HIGH").length;
+        const safeCount = scored.filter((s) => ["LOW", "MEDIUM"].includes(s.label)).length;
+
+        let text =
+          `Wallet Portfolio Risk Analysis\n` +
+          `Wallet: ${wallet.slice(0, 14)}...${wallet.slice(-6)}\n` +
+          `Tokens: ${scored.length}${accounts.length > 20 ? ` (top 20 of ${accounts.length})` : ""}\n` +
+          `${"─".repeat(55)}\n` +
+          `Summary: 🔴 ${extremeCount} EXTREME  🟠 ${highCount} HIGH  🟢 ${safeCount} SAFE\n\n`;
+
+        for (const s of scored) {
+          const icon = ICONS[s.label] ?? "⚪";
+          const scoreStr = s.score != null ? `${s.score}/100` : "?/100";
+          const amtFmt =
+            s.amount < 0.01
+              ? s.amount.toExponential(2)
+              : s.amount < 1000
+              ? s.amount.toFixed(4)
+              : s.amount.toLocaleString(undefined, { maximumFractionDigits: 0 });
+          text += `${icon} ${s.symbol.slice(0, 12).padEnd(12)} ${scoreStr.padStart(7)}  bal: ${amtFmt}\n`;
+          text += `   ${s.mint}\n`;
+        }
+
+        if (extremeCount > 0) {
+          text += `\n⚠️  ${extremeCount} EXTREME risk token(s) — likely rugs or illiquid. Consider exiting.\n`;
+        }
+        text += `\nRisk scoring by Sol Risk API v2.1. Data: Solana mainnet.`;
+
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `Error analyzing wallet: ${err.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
   return server;
 }
 
@@ -449,7 +596,7 @@ function createMcpServer() {
 function createFreeMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis-free",
-    version: "1.9.0",
+    version: "2.0.0",
     description:
       "FREE tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
       "5 free tools. BUY signal token details are PRO-only (free tier shows risk/momentum hints, not mints). " +
@@ -933,6 +1080,9 @@ function createFreeMcpServer() {
         `PRO-only features (unlock at paywall.xpay.sh/sol-mcp):\n` +
         `  🔒 BUY signal mints REVEALED — see the actual token + mint for every\n` +
         `     TRADE signal in get_graduation_signals (free tier hides these)\n` +
+        `  🔒 analyze_wallet        — full portfolio risk report for any Solana wallet\n` +
+        `     → checks every token the wallet holds, sorted by danger level\n` +
+        `     → audit a trader before copying, or screen your own exposure\n` +
         `  🔒 batch_token_risk      — risk scores for 10 tokens in 1 call\n` +
         `     → saves 9 API calls when screening a watchlist\n` +
         `  🔒 get_full_analysis     — risk + momentum combined in 1 call\n` +
@@ -1057,7 +1207,7 @@ if (isHttp) {
         "momentum signals, and pump.fun graduation trading with verifiable on-chain track record. " +
         "Every trade is logged and publicly auditable. Cross-chain: Solana execution + EVM trust layer (ERC-8004).",
       url: "https://sol-mcp-production.up.railway.app",
-      version: "1.9.0",
+      version: "2.0.0",
       capabilities: {
         streaming: false,
         pushNotifications: false,
@@ -1294,6 +1444,7 @@ if (isHttp) {
     <div class="tool"><div class="tool-icon">📈</div><div><div class="tool-name">get_momentum_signal</div><div class="tool-desc">Buy/sell momentum at 75s and 120s post-graduation. BUY/WATCH/SKIP with ratio, buys, sells, liquidity, price change.</div></div></div>
     <div class="tool"><div class="tool-icon">🎓</div><div><div class="tool-name">get_graduation_signals</div><div class="tool-desc">Live decisions from Sol's graduation alert engine — tokens evaluated, skipped, and traded in the last N decisions.</div></div></div>
     <div class="tool"><div class="tool-icon">📊</div><div><div class="tool-name">get_trading_performance</div><div class="tool-desc">Sol's live trading stats: win rate, avg PnL, best trade, open positions, and recent closed trades.</div></div></div>
+    <div class="tool"><div class="tool-icon">👛</div><div><div class="tool-name">analyze_wallet <span class="pro-tag">PRO</span></div><div class="tool-desc">Full portfolio risk report for any Solana wallet — every token ranked by danger level. Audit a trader before copying, or screen your own holdings for rugs.</div></div></div>
     <div class="tool"><div class="tool-icon">📦</div><div><div class="tool-name">batch_token_risk <span class="pro-tag">PRO</span></div><div class="tool-desc">Risk scores for up to 10 mints in a single call. Saves time when screening a portfolio or watchlist.</div></div></div>
     <div class="tool"><div class="tool-icon">🔍</div><div><div class="tool-name">get_full_analysis <span class="pro-tag">PRO</span></div><div class="tool-desc">Combined risk + momentum in one response. Includes entry recommendation, confidence, and reasoning.</div></div></div>
   </div>
@@ -1327,7 +1478,7 @@ if (isHttp) {
     res.json({
       status: "ok",
       server: "sol-crypto-analysis",
-      version: "1.9.0",
+      version: "2.0.0",
       tiers: {
         free: {
           endpoint: "/mcp/free",
@@ -1336,7 +1487,7 @@ if (isHttp) {
         },
         pro: {
           endpoint: "/mcp (via paywall.xpay.sh/sol-mcp)",
-          tools: ["get_token_risk", "get_momentum_signal", "batch_token_risk", "get_full_analysis", "get_graduation_signals", "get_trading_performance"],
+          tools: ["get_token_risk", "get_momentum_signal", "batch_token_risk", "get_full_analysis", "get_graduation_signals", "get_trading_performance", "analyze_wallet"],
           price: "$0.01/call (USDC, Base mainnet)",
         },
       },
