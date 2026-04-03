@@ -14,7 +14,7 @@
  *   FREE  → /mcp/free   — 7 tools (get_token_risk, get_momentum_signal, get_market_pulse,
  *                           get_graduation_signals, get_trading_performance,
  *                           get_alpha_leaderboard, get_pro_features)
- *   PRO   → /mcp        — All 6 tools via xpay.sh paywall ($0.01/call)
+ *   PRO   → /mcp        — All 9 tools via xpay.sh paywall ($0.01/call)
  * 
  * Usage:
  *   node server.js           → stdio mode (Claude Desktop / Cursor)
@@ -51,11 +51,11 @@ async function fetchMomentum(mint) {
 function createMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis",
-    version: "2.0.0",
+    version: "2.1.0",
     description:
       "PRO tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
-      "All 6 tools including batch analysis + full BUY signal token identities. $0.01/call via xpay.sh (USDC, Base mainnet). " +
-      "FREE tier at /mcp/free (5 tools, BUY signal mints hidden).",
+      "All 9 tools including batch analysis, wallet portfolio risk, and market regime classification. $0.01/call via xpay.sh (USDC, Base mainnet). " +
+      "FREE tier at /mcp/free (7 tools, BUY signal mints hidden).",
   });
 
   // Tool: get_token_risk
@@ -588,6 +588,194 @@ function createMcpServer() {
     }
   );
 
+  // Tool: get_market_regime
+  server.tool(
+    "get_market_regime",
+    "Classify the current pump.fun graduation market as BULL, NEUTRAL, or BEAR based on 24h signal quality. " +
+      "Analyzes Sol's live graduation alert engine: graduation velocity (tokens/hr), BUY signal rate, " +
+      "average momentum ratios, skip reason distribution, and 24h vs 72h performance trend. " +
+      "Use this before trading to know whether the market is generating actionable signals or if conditions are unfavorable. " +
+      "A BULL regime = high graduation rate + strong momentum + healthy BUY signal frequency. " +
+      "A BEAR regime = sparse quality signals, weak momentum, mostly filtered/skipped. " +
+      "PRO-only — requires signal pattern intelligence only available from live bot data.",
+    {},
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    async () => {
+      try {
+        const [decisionsRes, paperRes, healthRes] = await Promise.all([
+          fetch(`${GRAD_ALERT_API}/decisions?limit=300`),
+          fetch(`${GRAD_ALERT_API}/paper-trades?limit=50`),
+          fetch(`${GRAD_ALERT_API}/health`),
+        ]);
+
+        if (!decisionsRes.ok) throw new Error(`Decisions API error: ${decisionsRes.status}`);
+        const decisionsData = await decisionsRes.json();
+        const paperData = paperRes.ok ? await paperRes.json() : null;
+        const healthData = healthRes.ok ? await healthRes.json() : null;
+
+        const allDecisions = decisionsData.decisions ?? [];
+        const now = Date.now();
+        const H24 = 24 * 3600 * 1000;
+        const H72 = 72 * 3600 * 1000;
+
+        // ── Window slices ──
+        const last24h = allDecisions.filter(d => now - new Date(d.timestamp).getTime() < H24);
+        const last72h = allDecisions.filter(d => now - new Date(d.timestamp).getTime() < H72);
+        const prev24to48h = allDecisions.filter(d => {
+          const age = now - new Date(d.timestamp).getTime();
+          return age >= H24 && age < H24 * 2;
+        });
+
+        if (last24h.length === 0) {
+          return { content: [{ type: "text", text: "Insufficient data: no decisions in last 24h. Bot may be paused or data unavailable." }] };
+        }
+
+        // ── Core metrics (24h) ──
+        const buys24h = last24h.filter(d => d.decision === "TRADE");
+        const skips24h = last24h.filter(d => d.decision === "SKIP");
+        const buyRate24h = last24h.length > 0 ? buys24h.length / last24h.length : 0;
+        const gradVelocity = last24h.length / 24; // tokens analyzed per hour
+
+        const withMom = last24h.filter(d => d.inputs?.momentum_ratio != null);
+        const avgMom = withMom.length > 0
+          ? withMom.reduce((s, d) => s + d.inputs.momentum_ratio, 0) / withMom.length
+          : null;
+
+        // ── Trend: 24h vs prev 24-48h ──
+        const buyRatePrev = prev24to48h.length > 0
+          ? prev24to48h.filter(d => d.decision === "TRADE").length / prev24to48h.length
+          : null;
+        const withMomPrev = prev24to48h.filter(d => d.inputs?.momentum_ratio != null);
+        const avgMomPrev = withMomPrev.length > 0
+          ? withMomPrev.reduce((s, d) => s + d.inputs.momentum_ratio, 0) / withMomPrev.length
+          : null;
+
+        const signalTrend =
+          buyRatePrev == null ? "⚪ UNKNOWN"
+          : buyRate24h > buyRatePrev * 1.15 ? "📈 IMPROVING"
+          : buyRate24h < buyRatePrev * 0.85 ? "📉 DEGRADING"
+          : "➡️ STABLE";
+
+        // ── Skip reason breakdown ──
+        const skipReasons = skips24h.reduce((acc, d) => {
+          const r = d.skip_reason ?? "unknown";
+          acc[r] = (acc[r] ?? 0) + 1;
+          return acc;
+        }, {});
+        const topSkips = Object.entries(skipReasons).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+        // ── Paper trade performance (recent 20) ──
+        let paperWR = null;
+        let paperAvgPnl = null;
+        let paperCount = 0;
+        if (paperData) {
+          const trades = Array.isArray(paperData) ? paperData : (paperData.trades ?? paperData.paper_trades ?? []);
+          const recent = trades.slice(0, 20);
+          paperCount = recent.length;
+          if (paperCount > 0) {
+            const wins = recent.filter(t => (t.pnl_pct ?? t.pnl ?? 0) > 0).length;
+            paperWR = wins / paperCount;
+            paperAvgPnl = recent.reduce((s, t) => s + (t.pnl_pct ?? t.pnl ?? 0), 0) / paperCount;
+          }
+        }
+
+        // ── Regime classification ──
+        // BULL: high grad velocity + solid buy rate + strong momentum + positive paper performance
+        // BEAR: low velocity, very low buy rate, or clearly negative paper performance
+        // NEUTRAL: everything in between
+        const bullSignals = [
+          gradVelocity >= 60,           // 60+ tokens/hr analyzed = active market
+          buyRate24h >= 0.08,            // ≥8% convert to BUY
+          avgMom != null && avgMom >= 1.6,  // avg momentum ≥ 1.6x
+          paperWR != null && paperWR >= 0.50, // paper WR ≥ 50% recent 20
+          signalTrend === "📈 IMPROVING",
+        ].filter(Boolean).length;
+
+        const bearSignals = [
+          gradVelocity < 20,             // <20/hr = quiet/dead market
+          buyRate24h < 0.02,             // <2% BUY rate = basically nothing passing
+          avgMom != null && avgMom < 1.2, // momentum very weak
+          paperWR != null && paperWR < 0.30, // paper WR <30% = strategy losing
+          signalTrend === "📉 DEGRADING" && buyRate24h < 0.04,
+        ].filter(Boolean).length;
+
+        let regime, regimeIcon, regimeDesc;
+        if (bullSignals >= 3 && bearSignals === 0) {
+          regime = "BULL"; regimeIcon = "🟢";
+          regimeDesc = "Strong graduation market. Multiple quality signals per hour. Momentum ratios healthy. Favorable conditions for entries.";
+        } else if (bearSignals >= 2) {
+          regime = "BEAR"; regimeIcon = "🔴";
+          regimeDesc = "Weak market. Few graduations meeting quality thresholds, low momentum. Recommend caution — most signals are filtered noise.";
+        } else {
+          regime = "NEUTRAL"; regimeIcon = "🟡";
+          regimeDesc = "Mixed conditions. Some quality signals present but market not in ideal momentum regime. Standard filtering applies.";
+        }
+
+        const confidence =
+          (bullSignals + bearSignals) >= 3 ? "HIGH"
+          : (bullSignals + bearSignals) >= 2 ? "MEDIUM"
+          : "LOW";
+
+        // ── Format output ──
+        let text =
+          `Sol Market Regime Analysis — ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC\n` +
+          `${"═".repeat(55)}\n\n` +
+          `Regime: ${regimeIcon} ${regime}  (confidence: ${confidence})\n` +
+          `${regimeDesc}\n\n` +
+          `── 24h Signal Quality ──\n` +
+          `Graduation velocity: ${gradVelocity.toFixed(1)} tokens/hr analyzed\n` +
+          `BUY signal rate: ${(buyRate24h * 100).toFixed(1)}% (${buys24h.length} BUY / ${last24h.length} total)\n`;
+
+        if (avgMom != null) {
+          text += `Avg momentum ratio: ${avgMom.toFixed(2)}×`;
+          if (avgMomPrev != null) {
+            const momChg = ((avgMom - avgMomPrev) / avgMomPrev * 100).toFixed(1);
+            text += ` (vs ${avgMomPrev.toFixed(2)}× prev 24h, ${momChg > 0 ? "+" : ""}${momChg}%)`;
+          }
+          text += `\n`;
+        }
+
+        text += `Signal trend: ${signalTrend}`;
+        if (buyRatePrev != null) {
+          text += ` (${(buyRate24h * 100).toFixed(1)}% now vs ${(buyRatePrev * 100).toFixed(1)}% prev 24h)`;
+        }
+        text += `\n`;
+
+        if (paperCount > 0) {
+          text +=
+            `\n── Recent Paper Performance (last ${paperCount} trades) ──\n` +
+            `Win rate: ${(paperWR * 100).toFixed(1)}%\n` +
+            `Avg PnL: ${paperAvgPnl >= 0 ? "+" : ""}${paperAvgPnl.toFixed(2)}%\n`;
+        }
+
+        if (topSkips.length > 0) {
+          text += `\n── Why Tokens Are Filtered (24h) ──\n`;
+          for (const [reason, count] of topSkips) {
+            const pct = ((count / skips24h.length) * 100).toFixed(0);
+            text += `  ${reason}: ${count} (${pct}%)\n`;
+          }
+        }
+
+        if (healthData) {
+          const cb = healthData.circuit_breaker ?? {};
+          text +=
+            `\n── Bot Status ──\n` +
+            `Circuit breaker: ${cb.paused ? `⏸️ PAUSED (${cb.remainingMin ?? "?"}min remaining)` : "✅ Active"}\n` +
+            `WS feed: ${(healthData.ws?.status === "active") ? "✅ Live" : "⚠️ " + (healthData.ws?.status ?? "?")}\n`;
+        }
+
+        text +=
+          `\n${"─".repeat(55)}\n` +
+          `Bull signals: ${bullSignals}/5  Bear signals: ${bearSignals}/5\n` +
+          `Data: last ${last24h.length} decisions (24h window from ${last72h.length} available)\n`;
+
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
   return server;
 }
 
@@ -596,7 +784,7 @@ function createMcpServer() {
 function createFreeMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis-free",
-    version: "2.0.0",
+    version: "2.1.0",
     description:
       "FREE tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
       "5 free tools. BUY signal token details are PRO-only (free tier shows risk/momentum hints, not mints). " +
@@ -1083,6 +1271,9 @@ function createFreeMcpServer() {
         `  🔒 analyze_wallet        — full portfolio risk report for any Solana wallet\n` +
         `     → checks every token the wallet holds, sorted by danger level\n` +
         `     → audit a trader before copying, or screen your own exposure\n` +
+        `  🔒 get_market_regime     — classify current pump.fun market: BULL / NEUTRAL / BEAR\n` +
+        `     → 24h graduation velocity, BUY signal rate, momentum trend, skip reason breakdown\n` +
+        `     → know WHEN to trade, not just what to trade\n` +
         `  🔒 batch_token_risk      — risk scores for 10 tokens in 1 call\n` +
         `     → saves 9 API calls when screening a watchlist\n` +
         `  🔒 get_full_analysis     — risk + momentum combined in 1 call\n` +
@@ -1207,7 +1398,7 @@ if (isHttp) {
         "momentum signals, and pump.fun graduation trading with verifiable on-chain track record. " +
         "Every trade is logged and publicly auditable. Cross-chain: Solana execution + EVM trust layer (ERC-8004).",
       url: "https://sol-mcp-production.up.railway.app",
-      version: "2.0.0",
+      version: "2.1.0",
       capabilities: {
         streaming: false,
         pushNotifications: false,
@@ -1445,6 +1636,7 @@ if (isHttp) {
     <div class="tool"><div class="tool-icon">🎓</div><div><div class="tool-name">get_graduation_signals</div><div class="tool-desc">Live decisions from Sol's graduation alert engine — tokens evaluated, skipped, and traded in the last N decisions.</div></div></div>
     <div class="tool"><div class="tool-icon">📊</div><div><div class="tool-name">get_trading_performance</div><div class="tool-desc">Sol's live trading stats: win rate, avg PnL, best trade, open positions, and recent closed trades.</div></div></div>
     <div class="tool"><div class="tool-icon">👛</div><div><div class="tool-name">analyze_wallet <span class="pro-tag">PRO</span></div><div class="tool-desc">Full portfolio risk report for any Solana wallet — every token ranked by danger level. Audit a trader before copying, or screen your own holdings for rugs.</div></div></div>
+    <div class="tool"><div class="tool-icon">📊</div><div><div class="tool-name">get_market_regime <span class="pro-tag">PRO</span></div><div class="tool-desc">Classify the current pump.fun market as BULL / NEUTRAL / BEAR using 24h signal data. Shows graduation velocity, BUY signal rate, momentum trend, and skip reason breakdown — know WHEN to trade, not just what to trade.</div></div></div>
     <div class="tool"><div class="tool-icon">📦</div><div><div class="tool-name">batch_token_risk <span class="pro-tag">PRO</span></div><div class="tool-desc">Risk scores for up to 10 mints in a single call. Saves time when screening a portfolio or watchlist.</div></div></div>
     <div class="tool"><div class="tool-icon">🔍</div><div><div class="tool-name">get_full_analysis <span class="pro-tag">PRO</span></div><div class="tool-desc">Combined risk + momentum in one response. Includes entry recommendation, confidence, and reasoning.</div></div></div>
   </div>
@@ -1478,7 +1670,7 @@ if (isHttp) {
     res.json({
       status: "ok",
       server: "sol-crypto-analysis",
-      version: "2.0.0",
+      version: "2.1.0",
       tiers: {
         free: {
           endpoint: "/mcp/free",
@@ -1487,7 +1679,7 @@ if (isHttp) {
         },
         pro: {
           endpoint: "/mcp (via paywall.xpay.sh/sol-mcp)",
-          tools: ["get_token_risk", "get_momentum_signal", "batch_token_risk", "get_full_analysis", "get_graduation_signals", "get_trading_performance", "analyze_wallet"],
+          tools: ["get_token_risk", "get_momentum_signal", "batch_token_risk", "get_full_analysis", "get_graduation_signals", "get_trading_performance", "analyze_wallet", "get_market_regime"],
           price: "$0.01/call (USDC, Base mainnet)",
         },
       },
