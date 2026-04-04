@@ -51,7 +51,7 @@ async function fetchMomentum(mint) {
 function createMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis",
-    version: "2.1.0",
+    version: "2.2.0",
     description:
       "PRO tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
       "All 9 tools including batch analysis, wallet portfolio risk, and market regime classification. $0.01/call via xpay.sh (USDC, Base mainnet). " +
@@ -784,7 +784,7 @@ function createMcpServer() {
 function createFreeMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis-free",
-    version: "2.1.0",
+    version: "2.2.0",
     description:
       "FREE tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
       "5 free tools. BUY signal token details are PRO-only (free tier shows risk/momentum hints, not mints). " +
@@ -1243,6 +1243,110 @@ function createFreeMcpServer() {
     }
   );
 
+  // Tool: preview_wallet (free tier — PRO conversion hook for analyze_wallet)
+  server.tool(
+    "preview_wallet",
+    "[FREE] Preview SPL token holdings for any Solana wallet — shows what tokens are held and balances. " +
+      "Risk scores are hidden in the free tier (upgrade to PRO's analyze_wallet to see full risk report). " +
+      "Use this to quickly see WHAT a wallet holds before deciding if you need the full risk audit.",
+    {
+      wallet: z
+        .string()
+        .describe("Solana wallet address (base58 encoded public key)."),
+    },
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    async ({ wallet }) => {
+      try {
+        const rpcRes = await fetch("https://api.mainnet-beta.solana.com", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "getTokenAccountsByOwner",
+            params: [
+              wallet,
+              { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+              { encoding: "jsonParsed", commitment: "confirmed" },
+            ],
+          }),
+        });
+        const rpcData = await rpcRes.json();
+        if (rpcData.error) throw new Error(`RPC error: ${rpcData.error.message}`);
+
+        const accounts = rpcData.result?.value ?? [];
+        if (accounts.length === 0) {
+          return {
+            content: [{
+              type: "text",
+              text:
+                `Wallet: ${wallet}\nNo SPL tokens found.\n` +
+                `(Wallet may hold only SOL, be empty, or be invalid.)\n\n` +
+                `→ Try analyze_wallet (PRO) for deeper portfolio analysis.`,
+            }],
+          };
+        }
+
+        // Extract non-zero holdings, top 10 by amount
+        const holdings = accounts
+          .map((acc) => {
+            const info = acc.account?.data?.parsed?.info;
+            if (!info) return null;
+            const amount = parseFloat(info.tokenAmount?.uiAmount ?? 0);
+            return amount > 0 ? { mint: info.mint, amount } : null;
+          })
+          .filter(Boolean)
+          .sort((a, b) => b.amount - a.amount)
+          .slice(0, 10);
+
+        if (holdings.length === 0) {
+          return {
+            content: [{ type: "text", text: `Wallet ${wallet} has token accounts but all balances are zero.` }],
+          };
+        }
+
+        const shortWallet = wallet.slice(0, 6) + "..." + wallet.slice(-4);
+        let text =
+          `Wallet Portfolio Preview: ${shortWallet}\n` +
+          `${"═".repeat(50)}\n` +
+          `${holdings.length} token${holdings.length !== 1 ? "s" : ""} held (showing top ${holdings.length}):\n\n`;
+
+        for (let i = 0; i < holdings.length; i++) {
+          const h = holdings[i];
+          const shortMint = h.mint.slice(0, 8) + "..." + h.mint.slice(-4);
+          const amtStr =
+            h.amount < 1000
+              ? h.amount.toFixed(4)
+              : h.amount < 1_000_000
+              ? (h.amount / 1000).toFixed(1) + "K"
+              : (h.amount / 1_000_000).toFixed(1) + "M";
+          text +=
+            `${i + 1}. ${shortMint}\n` +
+            `   Balance : ${amtStr} tokens\n` +
+            `   Mint    : ${h.mint}\n` +
+            `   Risk    : 🔒 [PRO] — rug or safe?\n\n`;
+        }
+
+        if (accounts.length > 10) {
+          text += `  ...and ${accounts.length - 10} more token account${accounts.length - 10 !== 1 ? "s" : ""}.\n\n`;
+        }
+
+        text +=
+          `─────────────────────────────────────────────────\n` +
+          `🔒 Risk scores hidden — upgrade to PRO to audit this wallet:\n` +
+          `  analyze_wallet runs all ${holdings.length} token${holdings.length !== 1 ? "s" : ""} through Sol's risk engine\n` +
+          `  Returns 0-100 score per token, sorted EXTREME → LOW\n` +
+          `  One bad token can wipe a wallet — screen before you copy\n\n` +
+          `  → paywall.xpay.sh/sol-mcp ($0.01/call USDC, Base mainnet)\n` +
+          `  Or check one mint free: get_token_risk(mint)`;
+
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
   // Tool: get_pro_features (free tier conversion hook)
   server.tool(
     "get_pro_features",
@@ -1255,7 +1359,7 @@ function createFreeMcpServer() {
       const text =
         `Sol MCP — PRO Tier Features\n` +
         `${"═".repeat(45)}\n\n` +
-        `Current tier: FREE (5 tools, no limit)\n` +
+        `Current tier: FREE (8 tools, no limit)\n` +
         `PRO tier: $0.01/call USDC — pay per use, no subscription\n` +
         `Payment: Base mainnet USDC via xpay.sh (EVM wallet needed)\n\n` +
         `FREE tools (available now):\n` +
@@ -1264,12 +1368,13 @@ function createFreeMcpServer() {
         `  ✅ get_graduation_signals — SKIP decisions + redacted BUY hints\n` +
         `  ✅ get_trading_performance — win rate, PnL, recent trades\n` +
         `  ✅ get_market_pulse       — live market temperature + last BUY signal (no mint)\n` +
-        `  ✅ get_alpha_leaderboard  — best/worst signal outcomes (mints redacted)\n\n` +
+        `  ✅ get_alpha_leaderboard  — best/worst signal outcomes (mints redacted)\n` +
+        `  ✅ preview_wallet         — see what tokens a wallet holds (risk scores hidden)\n\n` +
         `PRO-only features (unlock at paywall.xpay.sh/sol-mcp):\n` +
         `  🔒 BUY signal mints REVEALED — see the actual token + mint for every\n` +
         `     TRADE signal in get_graduation_signals (free tier hides these)\n` +
         `  🔒 analyze_wallet        — full portfolio risk report for any Solana wallet\n` +
-        `     → checks every token the wallet holds, sorted by danger level\n` +
+        `     → risk-scores all tokens that preview_wallet shows you\n` +
         `     → audit a trader before copying, or screen your own exposure\n` +
         `  🔒 get_market_regime     — classify current pump.fun market: BULL / NEUTRAL / BEAR\n` +
         `     → 24h graduation velocity, BUY signal rate, momentum trend, skip reason breakdown\n` +
@@ -1398,7 +1503,7 @@ if (isHttp) {
         "momentum signals, and pump.fun graduation trading with verifiable on-chain track record. " +
         "Every trade is logged and publicly auditable. Cross-chain: Solana execution + EVM trust layer (ERC-8004).",
       url: "https://sol-mcp-production.up.railway.app",
-      version: "2.1.0",
+      version: "2.2.0",
       capabilities: {
         streaming: false,
         pushNotifications: false,
@@ -1464,7 +1569,7 @@ if (isHttp) {
         schemes: ["none", "x402"],
         freeTier: {
           endpoint: "https://sol-mcp-production.up.railway.app/mcp/free",
-          tools: ["get_token_risk", "get_momentum_signal", "get_market_pulse", "get_graduation_signals", "get_trading_performance", "get_alpha_leaderboard", "get_pro_features"],
+          tools: ["get_token_risk", "get_momentum_signal", "get_market_pulse", "get_graduation_signals", "get_trading_performance", "get_alpha_leaderboard", "preview_wallet", "get_pro_features"],
           price: "FREE — no auth required",
         },
         x402: {
@@ -1611,6 +1716,7 @@ if (isHttp) {
         <li>get_momentum_signal</li>
         <li>get_graduation_signals</li>
         <li>get_trading_performance</li>
+        <li>preview_wallet (wallet holdings teaser)</li>
         <li>get_pro_features (upgrade guide)</li>
       </ul>
       <a class="cta free" href="https://smithery.ai/server/@autonsol/sol-mcp" target="_blank">Install on Smithery →</a>
@@ -1670,11 +1776,11 @@ if (isHttp) {
     res.json({
       status: "ok",
       server: "sol-crypto-analysis",
-      version: "2.1.0",
+      version: "2.2.0",
       tiers: {
         free: {
           endpoint: "/mcp/free",
-          tools: ["get_token_risk", "get_momentum_signal", "get_market_pulse", "get_graduation_signals", "get_trading_performance", "get_alpha_leaderboard", "get_pro_features"],
+          tools: ["get_token_risk", "get_momentum_signal", "get_market_pulse", "get_graduation_signals", "get_trading_performance", "get_alpha_leaderboard", "preview_wallet", "get_pro_features"],
           price: "FREE",
         },
         pro: {
