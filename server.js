@@ -14,7 +14,7 @@
  *   FREE  → /mcp/free   — 7 tools (get_token_risk, get_momentum_signal, get_market_pulse,
  *                           get_graduation_signals, get_trading_performance,
  *                           get_alpha_leaderboard, get_pro_features)
- *   PRO   → /mcp        — All 9 tools via xpay.sh paywall ($0.01/call)
+ *   PRO   → /mcp        — All 9 tools, x402 payment-gated ($0.01/call USDC on Base)
  * 
  * Usage:
  *   node server.js           → stdio mode (Claude Desktop / Cursor)
@@ -27,6 +27,9 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import express from "express";
 import { z } from "zod";
 import { randomUUID } from "crypto";
+import { paymentMiddleware } from "@x402/express";
+import { x402ResourceServer, HTTPFacilitatorClient } from "@x402/core/server";
+import { registerExactEvmScheme } from "@x402/evm/exact/server";
 
 const RISK_API = "https://sol-risk-production.up.railway.app";
 const MOMENTUM_API = "https://momentum-signal-production.up.railway.app";
@@ -51,10 +54,10 @@ async function fetchMomentum(mint) {
 function createMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis",
-    version: "2.2.0",
+    version: "2.3.0",
     description:
       "PRO tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
-      "All 9 tools including batch analysis, wallet portfolio risk, and market regime classification. $0.01/call via xpay.sh (USDC, Base mainnet). " +
+      "All 9 tools including batch analysis, wallet portfolio risk, and market regime classification. $0.01/call USDC on Base (x402 native — no account needed). " +
       "FREE tier at /mcp/free (7 tools, BUY signal mints hidden).",
   });
 
@@ -784,7 +787,7 @@ function createMcpServer() {
 function createFreeMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis-free",
-    version: "2.2.0",
+    version: "2.3.0",
     description:
       "FREE tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
       "5 free tools. BUY signal token details are PRO-only (free tier shows risk/momentum hints, not mints). " +
@@ -1383,11 +1386,16 @@ function createFreeMcpServer() {
         `     → saves 9 API calls when screening a watchlist\n` +
         `  🔒 get_full_analysis     — risk + momentum combined in 1 call\n` +
         `     → saves 1 call per token vs using 2 free tools separately\n\n` +
-        `How to upgrade:\n` +
+        `How to upgrade — two paths:\n\n` +
+        `Option A — x402 (for AI agents / MCP clients with crypto wallet):\n` +
+        `  Use endpoint: https://sol-mcp-production.up.railway.app/mcp\n` +
+        `  x402-compatible clients auto-pay $0.01 USDC on Base per call.\n` +
+        `  No account needed — wallet signs payment automatically.\n\n` +
+        `Option B — Browser wallet (for humans):\n` +
         `  1. Go to: https://paywall.xpay.sh/sol-mcp\n` +
-        `  2. Connect an EVM wallet (MetaMask, Coinbase, etc.)\n` +
-        `  3. Fund with USDC on Base mainnet (any amount)\n` +
-        `  4. Use the PRO endpoint: https://sol-mcp-production.up.railway.app/mcp\n\n` +
+        `  2. Connect an EVM wallet (MetaMask, Coinbase Wallet, etc.)\n` +
+        `  3. Fund with USDC on Base mainnet\n` +
+        `  4. Use endpoint: https://paywall.xpay.sh/sol-mcp/mcp\n\n` +
         `Questions? Sol is on Telegram: @autonsol`;
       return { content: [{ type: "text", text }] };
     }
@@ -1407,6 +1415,36 @@ if (isHttp) {
 
   const sessions = new Map(); // sessionId → { server, transport }
   const freeSessions = new Map(); // sessionId → { server, transport } (free tier)
+
+  // ── x402 Payment Gate for PRO tier (/mcp) ────────────────────────────────
+  // Agents pay $0.01 USDC on Base Sepolia (testnet) → Sol's EVM wallet.
+  // x402.org facilitator supports: eip155:84532 (Base Sepolia) + solana mainnet.
+  // Production mainnet upgrade: use Coinbase Commerce facilitator (supports eip155:8453).
+  // SOL_EVM_WALLET env var overrides default wallet address.
+  const SOL_WALLET = process.env.SOL_EVM_WALLET || "0x735f8F73B9F72e95c30d419060D2Fbc2e10370FE";
+  const x402Network = process.env.X402_NETWORK || "eip155:84532"; // Base Sepolia by default
+  const facilitatorClient = new HTTPFacilitatorClient({
+    url: process.env.X402_FACILITATOR_URL || "https://x402.org/facilitator",
+  });
+  const resourceServer = new x402ResourceServer(facilitatorClient);
+  registerExactEvmScheme(resourceServer);
+
+  const x402Mw = paymentMiddleware(
+    {
+      "POST /mcp": {
+        accepts: [
+          {
+            scheme: "exact",
+            price: "$0.01",
+            network: x402Network,
+            payTo: SOL_WALLET,
+          },
+        ],
+        description: "Sol MCP PRO — token risk scoring, wallet analysis, graduation signals, and market regime. $0.01 USDC per call.",
+      },
+    },
+    resourceServer,
+  );
 
   // ── Free tier: /mcp/free ─────────────────────────────────────────────────
   app.post("/mcp/free", async (req, res) => {
@@ -1447,8 +1485,12 @@ if (isHttp) {
     res.status(200).json({ ok: true });
   });
 
-  // ── Pro tier: /mcp (all 6 tools, served behind xpay.sh paywall) ─────────
-  app.post("/mcp", async (req, res) => {
+  // ── Pro tier: /mcp (all tools, x402 payment-gated) ──────────────────────
+  // x402Mw intercepts requests without payment:
+  //   - No X-PAYMENT header → returns 402 with payment requirements (pay Sol's wallet)
+  //   - Invalid payment → returns 402 with error
+  //   - Valid payment → verified & settled on Base, then continues to MCP handler
+  app.post("/mcp", x402Mw, async (req, res) => {
     const sessionId = req.headers["mcp-session-id"];
 
     if (sessionId && sessions.has(sessionId)) {
@@ -1503,7 +1545,7 @@ if (isHttp) {
         "momentum signals, and pump.fun graduation trading with verifiable on-chain track record. " +
         "Every trade is logged and publicly auditable. Cross-chain: Solana execution + EVM trust layer (ERC-8004).",
       url: "https://sol-mcp-production.up.railway.app",
-      version: "2.2.0",
+      version: "2.3.0",
       capabilities: {
         streaming: false,
         pushNotifications: false,
@@ -1776,7 +1818,7 @@ if (isHttp) {
     res.json({
       status: "ok",
       server: "sol-crypto-analysis",
-      version: "2.2.0",
+      version: "2.3.0",
       tiers: {
         free: {
           endpoint: "/mcp/free",
@@ -1794,6 +1836,15 @@ if (isHttp) {
       activeFreeSessions: freeSessions.size,
     })
   );
+
+  // Initialize x402 resource server — fetches supported payment schemes from facilitator.
+  // Must complete before first payment request to avoid "Facilitator does not support exact" error.
+  try {
+    await resourceServer.initialize();
+    process.stderr.write("x402 facilitator initialized ✓\n");
+  } catch (err) {
+    process.stderr.write(`x402 facilitator init warning: ${err.message} — payments may fail\n`);
+  }
 
   const PORT = process.env.PORT || 3100;
   app.listen(PORT, () => {
