@@ -9,16 +9,21 @@
  *   - get_full_analysis: Risk + momentum combined
  *   - get_graduation_signals: Live BUY/SKIP decisions from Sol's graduation alert engine
  *   - get_trading_performance: Live trading stats (win rate, PnL, recent trades)
+ *   - analyze_wallet: Scan a Solana wallet for risky SPL tokens (PRO)
+ *   - get_market_regime: Classify current market as BULL/NEUTRAL/BEAR (PRO)
  * 
  * Tiers:
- *   FREE  → /mcp/free   — 7 tools (get_token_risk, get_momentum_signal, get_market_pulse,
+ *   FREE  → /mcp/free   — 8 tools (get_token_risk, get_momentum_signal, get_market_pulse,
  *                           get_graduation_signals, get_trading_performance,
- *                           get_alpha_leaderboard, get_pro_features)
- *   PRO   → /mcp        — All 9 tools, x402 payment-gated ($0.01/call USDC on Base)
+ *                           get_alpha_leaderboard, preview_wallet, get_pro_features)
+ *   PRO   → /mcp        — All 10 tools, x402 native ($0.01/call USDC on Solana mainnet)
+ * 
+ * Payment: x402 native on Solana mainnet — no account needed, wallet auto-pays.
+ *          Fallback: https://sol-mcp-production.up.railway.app/mcp (for non-x402 clients)
  * 
  * Usage:
  *   node server.js           → stdio mode (Claude Desktop / Cursor)
- *   node server.js --http    → HTTP mode (remote, for xpay.sh proxy)
+ *   node server.js --http    → HTTP mode (remote MCP server)
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -30,6 +35,7 @@ import { randomUUID } from "crypto";
 import { paymentMiddleware } from "@x402/express";
 import { x402ResourceServer, HTTPFacilitatorClient } from "@x402/core/server";
 import { registerExactEvmScheme } from "@x402/evm/exact/server";
+import { registerExactSvmScheme } from "@x402/svm/exact/server";
 
 const RISK_API = "https://sol-risk-production.up.railway.app";
 const MOMENTUM_API = "https://momentum-signal-production.up.railway.app";
@@ -54,10 +60,10 @@ async function fetchMomentum(mint) {
 function createMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis",
-    version: "2.3.0",
+    version: "2.4.0",
     description:
       "PRO tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
-      "All 9 tools including batch analysis, wallet portfolio risk, and market regime classification. $0.01/call USDC on Base (x402 native — no account needed). " +
+      "All 10 tools including batch analysis, wallet portfolio risk, and market regime classification. $0.01/call USDC on Solana mainnet (x402 native — no account needed, wallet auto-pays). " +
       "FREE tier at /mcp/free (7 tools, BUY signal mints hidden).",
   });
 
@@ -787,11 +793,11 @@ function createMcpServer() {
 function createFreeMcpServer() {
   const server = new McpServer({
     name: "sol-crypto-analysis-free",
-    version: "2.3.0",
+    version: "2.4.0",
     description:
       "FREE tier — Real-time Solana token risk scoring, momentum signals, and graduation alert decisions. " +
       "5 free tools. BUY signal token details are PRO-only (free tier shows risk/momentum hints, not mints). " +
-      "Upgrade at paywall.xpay.sh/sol-mcp ($0.01/call USDC) to unlock all signals + batch analysis.",
+      "Upgrade at sol-mcp-production.up.railway.app/mcp ($0.01/call USDC) to unlock all signals + batch analysis.",
   });
 
   // Register all 6 free tools by re-using the full server's tool definitions.
@@ -826,7 +832,7 @@ function createFreeMcpServer() {
           `⚡ UPGRADE TO PRO — $0.01/call (USDC)\n` +
           `  get_full_analysis: risk + momentum in ONE call (vs 2 free calls)\n` +
           `  batch_token_risk: score 10 tokens at once\n` +
-          `  → paywall.xpay.sh/sol-mcp`;
+          `  → sol-mcp-production.up.railway.app/mcp`;
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
@@ -866,7 +872,7 @@ function createFreeMcpServer() {
           `Momentum Score: ${score}/100\n` +
           `Confidence: ${confidence}` + windows +
           actionLine +
-          `\n→ paywall.xpay.sh/sol-mcp ($0.01/call USDC)`;
+          `\n→ sol-mcp-production.up.railway.app/mcp ($0.01/call USDC)`;
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
@@ -879,7 +885,7 @@ function createFreeMcpServer() {
     "[FREE] Get recent token graduation signal decisions from Sol's on-chain analysis engine. " +
       "Shows SKIP decisions with full reasoning (why tokens were rejected). " +
       "BUY signal token details are PRO-only — free tier shows count + risk/momentum hints. " +
-      "Upgrade at paywall.xpay.sh/sol-mcp ($0.01/call USDC) to see buy signal mints.",
+      "Upgrade at sol-mcp-production.up.railway.app/mcp ($0.01/call USDC) to see buy signal mints.",
     {
       limit: z.number().int().min(1).max(50).default(10)
         .describe("Number of recent decisions to return (1–50). Default: 10."),
@@ -928,7 +934,7 @@ function createFreeMcpServer() {
               if (inp.momentum_ratio != null)
                 text += `  Momentum: ${inp.momentum_ratio}× (${inp.momentum_buys ?? "?"}B/${inp.momentum_sells ?? "?"}S)`;
               text += `\n  Token: [hidden — upgrade to unlock]\n`;
-              text += `  → paywall.xpay.sh/sol-mcp ($0.01/call USDC)\n`;
+              text += `  → sol-mcp-production.up.railway.app/mcp ($0.01/call USDC)\n`;
             } else {
               // Full SKIP decision shown — these are the rejects, no trading value
               text += `\n🔴 SKIP  ${ts} UTC\n`;
@@ -948,7 +954,7 @@ function createFreeMcpServer() {
           `  All TRADE signal mints revealed in real time\n` +
           `  batch_token_risk: score 10 tokens in 1 call\n` +
           `  get_full_analysis: risk + momentum combined\n` +
-          `  $0.01/call USDC → paywall.xpay.sh/sol-mcp`;
+          `  $0.01/call USDC → sol-mcp-production.up.railway.app/mcp`;
 
         return { content: [{ type: "text", text }] };
       } catch (err) {
@@ -1035,7 +1041,7 @@ function createFreeMcpServer() {
           `  🔒 get_graduation_signals: BUY signal MINTS revealed (free hides them)\n` +
           `  🔒 get_full_analysis: risk + momentum in 1 call\n` +
           `  🔒 batch_token_risk: screen 10 tokens at once\n` +
-          `  → paywall.xpay.sh/sol-mcp ($0.01/call USDC, no subscription)`;
+          `  → sol-mcp-production.up.railway.app/mcp ($0.01/call USDC, no subscription)`;
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
@@ -1130,7 +1136,7 @@ function createFreeMcpServer() {
           `🔒 Token identities hidden in free tier.\n` +
           `   PRO reveals the MINT ADDRESS for every BUY signal — past and live.\n` +
           `   At $0.01/call, one correct trade pays for hundreds of lookups.\n` +
-          `   → paywall.xpay.sh/sol-mcp (USDC, Base mainnet)\n`;
+          `   → sol-mcp-production.up.railway.app/mcp (USDC, Solana mainnet)\n`;
 
         return { content: [{ type: "text", text }] };
       } catch (err) {
@@ -1237,7 +1243,7 @@ function createFreeMcpServer() {
         text +=
           `\n─────────────────────────────────────────────────\n` +
           `🔒 BUY signal mints are PRO-only. One correct entry pays for 100+ lookups.\n` +
-          `   → paywall.xpay.sh/sol-mcp ($0.01/call USDC, Base mainnet)\n`;
+          `   → sol-mcp-production.up.railway.app/mcp ($0.01/call USDC, Solana mainnet)\n`;
 
         return { content: [{ type: "text", text }] };
       } catch (err) {
@@ -1340,7 +1346,7 @@ function createFreeMcpServer() {
           `  analyze_wallet runs all ${holdings.length} token${holdings.length !== 1 ? "s" : ""} through Sol's risk engine\n` +
           `  Returns 0-100 score per token, sorted EXTREME → LOW\n` +
           `  One bad token can wipe a wallet — screen before you copy\n\n` +
-          `  → paywall.xpay.sh/sol-mcp ($0.01/call USDC, Base mainnet)\n` +
+          `  → sol-mcp-production.up.railway.app/mcp ($0.01/call USDC, Solana mainnet)\n` +
           `  Or check one mint free: get_token_risk(mint)`;
 
         return { content: [{ type: "text", text }] };
@@ -1354,8 +1360,8 @@ function createFreeMcpServer() {
   server.tool(
     "get_pro_features",
     "List all PRO tier tools and how to upgrade. " +
-      "PRO adds batch_token_risk (10 tokens in 1 call) and get_full_analysis (risk + momentum combined). " +
-      "$0.01/call USDC via xpay.sh — no subscription, pay only when you use it.",
+      "PRO adds analyze_wallet, get_market_regime, batch_token_risk, get_full_analysis, and revealed BUY signal mints. " +
+      "$0.01/call USDC on Solana mainnet (x402 native — Solana wallet auto-pays, no account needed).",
     {},
     { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async () => {
@@ -1364,7 +1370,7 @@ function createFreeMcpServer() {
         `${"═".repeat(45)}\n\n` +
         `Current tier: FREE (8 tools, no limit)\n` +
         `PRO tier: $0.01/call USDC — pay per use, no subscription\n` +
-        `Payment: Base mainnet USDC via xpay.sh (EVM wallet needed)\n\n` +
+        `Payment: Solana mainnet USDC (x402 native — Solana wallet auto-pays)\n\n` +
         `FREE tools (available now):\n` +
         `  ✅ get_token_risk         — risk score for 1 token\n` +
         `  ✅ get_momentum_signal    — buy/sell momentum for 1 token\n` +
@@ -1373,7 +1379,7 @@ function createFreeMcpServer() {
         `  ✅ get_market_pulse       — live market temperature + last BUY signal (no mint)\n` +
         `  ✅ get_alpha_leaderboard  — best/worst signal outcomes (mints redacted)\n` +
         `  ✅ preview_wallet         — see what tokens a wallet holds (risk scores hidden)\n\n` +
-        `PRO-only features (unlock at paywall.xpay.sh/sol-mcp):\n` +
+        `PRO-only features (endpoint: https://sol-mcp-production.up.railway.app/mcp):\n` +
         `  🔒 BUY signal mints REVEALED — see the actual token + mint for every\n` +
         `     TRADE signal in get_graduation_signals (free tier hides these)\n` +
         `  🔒 analyze_wallet        — full portfolio risk report for any Solana wallet\n` +
@@ -1386,17 +1392,17 @@ function createFreeMcpServer() {
         `     → saves 9 API calls when screening a watchlist\n` +
         `  🔒 get_full_analysis     — risk + momentum combined in 1 call\n` +
         `     → saves 1 call per token vs using 2 free tools separately\n\n` +
-        `How to upgrade — two paths:\n\n` +
-        `Option A — x402 (for AI agents / MCP clients with crypto wallet):\n` +
-        `  Use endpoint: https://sol-mcp-production.up.railway.app/mcp\n` +
-        `  x402-compatible clients auto-pay $0.01 USDC on Base per call.\n` +
-        `  No account needed — wallet signs payment automatically.\n\n` +
-        `Option B — Browser wallet (for humans):\n` +
-        `  1. Go to: https://paywall.xpay.sh/sol-mcp\n` +
-        `  2. Connect an EVM wallet (MetaMask, Coinbase Wallet, etc.)\n` +
-        `  3. Fund with USDC on Base mainnet\n` +
-        `  4. Use endpoint: https://paywall.xpay.sh/sol-mcp/mcp\n\n` +
-        `Questions? Sol is on Telegram: @autonsol`;
+        `How to upgrade:\n\n` +
+        `Option A — x402 (for AI agents + MCP clients with Solana wallet):\n` +
+        `  Endpoint: https://sol-mcp-production.up.railway.app/mcp\n` +
+        `  x402-compatible clients auto-pay $0.01 USDC on Solana mainnet per call.\n` +
+        `  No account needed — wallet signs payment automatically.\n` +
+        `  Works with any MCP client that supports x402 (Anthropic, etc.)\n\n` +
+        `Option B — Manual (for non-x402 MCP clients):\n` +
+        `  1. Fund a Solana wallet with USDC (Solana mainnet)\n` +
+        `  2. Configure your MCP client to use PRO endpoint with x402 payment header\n` +
+        `  3. Endpoint: https://sol-mcp-production.up.railway.app/mcp\n\n` +
+        `Questions? Sol on Telegram: @autonsol`;
       return { content: [{ type: "text", text }] };
     }
   );
@@ -1417,17 +1423,23 @@ if (isHttp) {
   const freeSessions = new Map(); // sessionId → { server, transport } (free tier)
 
   // ── x402 Payment Gate for PRO tier (/mcp) ────────────────────────────────
-  // Agents pay $0.01 USDC on Base Sepolia (testnet) → Sol's EVM wallet.
-  // x402.org facilitator supports: eip155:84532 (Base Sepolia) + solana mainnet.
-  // Production mainnet upgrade: use Coinbase Commerce facilitator (supports eip155:8453).
-  // SOL_EVM_WALLET env var overrides default wallet address.
-  const SOL_WALLET = process.env.SOL_EVM_WALLET || "0x735f8F73B9F72e95c30d419060D2Fbc2e10370FE";
-  const x402Network = process.env.X402_NETWORK || "eip155:84532"; // Base Sepolia by default
+  // Agents pay $0.01 USDC on Solana mainnet → Sol's Solana wallet.
+  // x402.org facilitator supports Solana mainnet natively (no separate account needed).
+  // CAIP-2 network ID: solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1
+  //
+  // Env overrides:
+  //   SOL_PAYMENT_WALLET — Solana wallet to receive USDC (default: Sol's mainnet wallet)
+  //   X402_FACILITATOR_URL — x402 facilitator URL (default: https://x402.org/facilitator)
+  //   X402_NETWORK — override network (default: Solana mainnet)
+  const SOL_PAYMENT_WALLET = process.env.SOL_PAYMENT_WALLET || "DngYMKx2VpAJiotUuXjZXZ3BD52A1qVu47ZYsyUzP4WS";
+  const SOLANA_MAINNET_CAIP2 = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
+  const x402Network = process.env.X402_NETWORK || SOLANA_MAINNET_CAIP2;
   const facilitatorClient = new HTTPFacilitatorClient({
     url: process.env.X402_FACILITATOR_URL || "https://x402.org/facilitator",
   });
   const resourceServer = new x402ResourceServer(facilitatorClient);
-  registerExactEvmScheme(resourceServer);
+  registerExactEvmScheme(resourceServer);   // Keep EVM for future Base mainnet support
+  registerExactSvmScheme(resourceServer);   // Solana mainnet USDC payments
 
   const x402Mw = paymentMiddleware(
     {
@@ -1437,10 +1449,10 @@ if (isHttp) {
             scheme: "exact",
             price: "$0.01",
             network: x402Network,
-            payTo: SOL_WALLET,
+            payTo: SOL_PAYMENT_WALLET,
           },
         ],
-        description: "Sol MCP PRO — token risk scoring, wallet analysis, graduation signals, and market regime. $0.01 USDC per call.",
+        description: "Sol MCP PRO — Solana token risk scoring, wallet analysis, graduation signals, and market regime. $0.01 USDC per call on Solana mainnet (x402 native — no account needed).",
       },
     },
     resourceServer,
@@ -1545,7 +1557,7 @@ if (isHttp) {
         "momentum signals, and pump.fun graduation trading with verifiable on-chain track record. " +
         "Every trade is logged and publicly auditable. Cross-chain: Solana execution + EVM trust layer (ERC-8004).",
       url: "https://sol-mcp-production.up.railway.app",
-      version: "2.3.0",
+      version: "2.4.0",
       capabilities: {
         streaming: false,
         pushNotifications: false,
@@ -1615,7 +1627,7 @@ if (isHttp) {
           price: "FREE — no auth required",
         },
         x402: {
-          endpoint: "https://paywall.xpay.sh/sol-mcp",
+          endpoint: "https://sol-mcp-production.up.railway.app/mcp",
           pricePerCall: "0.01",
           currency: "USDC",
           network: "base-mainnet",
@@ -1624,7 +1636,7 @@ if (isHttp) {
       },
       serviceEndpoints: {
         mcp_free: "https://sol-mcp-production.up.railway.app/mcp/free",
-        mcp_pro_paywall: "https://paywall.xpay.sh/sol-mcp",
+        mcp_pro_paywall: "https://sol-mcp-production.up.railway.app/mcp",
         agent_card: "https://sol-mcp-production.up.railway.app/.well-known/agent-card.json",
         trading_decisions: "https://grad-alert-production.up.railway.app/decisions",
         trading_performance: "https://grad-alert-production.up.railway.app/real-trades",
@@ -1770,10 +1782,10 @@ if (isHttp) {
         <li>All free tools</li>
         <li>batch_token_risk (up to 10 tokens)</li>
         <li>get_full_analysis (risk + momentum)</li>
-        <li>USDC on Base mainnet</li>
-        <li>Instant access via xpay.sh</li>
+        <li>USDC on Solana mainnet</li>
+        <li>Instant access x402 native</li>
       </ul>
-      <a class="cta pro" href="https://paywall.xpay.sh/sol-mcp" target="_blank">Upgrade to PRO →</a>
+      <a class="cta pro" href="https://sol-mcp-production.up.railway.app/mcp" target="_blank">Upgrade to PRO →</a>
     </div>
   </div>
 
@@ -1799,7 +1811,7 @@ if (isHttp) {
     }
   }
 }</pre>
-    <p style="color:var(--muted);font-size:0.88rem;margin-top:12px">For PRO: replace the URL with <code style="color:#14f195">https://paywall.xpay.sh/sol-mcp</code> after purchasing at <a href="https://paywall.xpay.sh/sol-mcp">xpay.sh</a>.</p>
+    <p style="color:var(--muted);font-size:0.88rem;margin-top:12px">PRO endpoint: <code style="color:#14f195">https://sol-mcp-production.up.railway.app/mcp</code> — x402 native, Solana wallet auto-pays $0.01 USDC per call.</p>
     <p style="color:var(--muted);font-size:0.88rem;margin-top:8px">Or install via <a href="https://smithery.ai/server/@autonsol/sol-mcp">Smithery</a> for one-click setup.</p>
   </div>
 
@@ -1818,7 +1830,7 @@ if (isHttp) {
     res.json({
       status: "ok",
       server: "sol-crypto-analysis",
-      version: "2.3.0",
+      version: "2.4.0",
       tiers: {
         free: {
           endpoint: "/mcp/free",
@@ -1826,9 +1838,9 @@ if (isHttp) {
           price: "FREE",
         },
         pro: {
-          endpoint: "/mcp (via paywall.xpay.sh/sol-mcp)",
+          endpoint: "/mcp (via sol-mcp-production.up.railway.app/mcp)",
           tools: ["get_token_risk", "get_momentum_signal", "batch_token_risk", "get_full_analysis", "get_graduation_signals", "get_trading_performance", "analyze_wallet", "get_market_regime"],
-          price: "$0.01/call (USDC, Base mainnet)",
+          price: "$0.01/call (USDC, Solana mainnet)",
         },
       },
       agentCard: "/.well-known/agent-card.json",
